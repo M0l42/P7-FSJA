@@ -27,7 +27,8 @@ module.exports = function (config) {
     coverageReporter: {
       dir: require("path").join(__dirname, "./coverage/microcrm"),
       subdir: ".",
-      reporters: [{ type: "html" }, { type: "text-summary" }],
+      // lcovonly: coverage report imported by SonarQube Cloud
+      reporters: [{ type: "html" }, { type: "text-summary" }, { type: "lcovonly" }],
     },
     reporters: ["progress", "kjhtml"],
     browsers: ["ChromeHeadlessNoSandbox", "ChromeHeadless", "Chrome"],
