@@ -17,6 +17,12 @@ repositories {
 	mavenCentral()
 }
 
+// Lock resolved dependency versions in gradle.lockfile: reproducible builds, no silent version change.
+// Update with: ./gradlew dependencies --write-locks
+dependencyLocking {
+	lockAllConfigurations()
+}
+
 dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
 	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
