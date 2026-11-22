@@ -325,7 +325,7 @@ La *quality gate* (§4.3) bloque une pull request qui introduit un bug, une vuln
   - aucun secret dans le code, les images, les artefacts ou les logs ;
   - *secret scanning* et *push protection* sont activés sur le dépôt : un push contenant un jeton est refusé.
 - **Permissions minimales** : chaque workflow démarre en `contents: read` et n'ajoute que ce dont un job a besoin (`packages: write` pour publier les images, `contents: write` pour créer une release, `security-events: write` pour les rapports Trivy).
-- **Actions GitHub** : uniquement des actions maintenues et documentées, référencées par version majeure (`actions/checkout@v4`) et tenues à jour par Dependabot.
+- **Actions GitHub** : uniquement des actions maintenues et documentées, tenues à jour par Dependabot. Les actions officielles de GitHub (`actions/*`) sont référencées par version majeure (`actions/checkout@v7`). Les actions **tierces** (SonarQube, Trivy, Docker) sont **épinglées par SHA de commit**, car un tag peut être déplacé par son propriétaire, pas un SHA. Ce choix a été révisé après la première analyse SonarQube, qui a signalé l'épinglage par tag comme une vulnérabilité (règle `githubactions:S7637`).
 
 ### 5.1 Résultats SonarQube
 
@@ -355,7 +355,7 @@ L'application manipule des **données personnelles** (noms, e-mails, organisatio
 |---|---|
 | Secret exposé dans le code ou les logs | Secrets GitHub masqués dans les logs, *secret scanning* + *push protection*, un seul secret stocké |
 | Jeton aux droits trop larges | `GITHUB_TOKEN` éphémère, permissions minimales par workflow |
-| Action GitHub compromise (chaîne d'approvisionnement) | Actions officielles ou d'éditeurs reconnus, mises à jour suivies par Dependabot ; épinglage par SHA prévu (§5.3) |
+| Action GitHub compromise (chaîne d'approvisionnement) | Actions officielles ou d'éditeurs reconnus, actions tierces épinglées par SHA, mises à jour suivies par Dependabot |
 | Image publiée avec une faille critique | Scan Trivy bloquant avant publication |
 | Dépendance devenue vulnérable sans modification du code | Exécution nightly, alertes Dependabot |
 | Image de base non maintenue ou non figée | Images officielles en version figée, mises à jour proposées par Dependabot |
@@ -382,7 +382,7 @@ L'application manipule des **données personnelles** (noms, e-mails, organisatio
 
 - Mettre en place l'authentification (Spring Security + OpenID Connect) côté API et front.
 - Servir l'API derrière Caddy en HTTPS, sans exposer directement le port 8080.
-- Épingler les actions GitHub par SHA de commit.
+- Étendre l'épinglage par SHA aux actions officielles `actions/*`.
 - Évaluer une image d'exécution *distroless* pour réduire encore la surface d'attaque.
 - Remplacer HSQLDB en mémoire par une base persistante sauvegardée (§7).
 

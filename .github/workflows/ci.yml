@@ -100,8 +100,8 @@ jobs:
           cache: npm
           cache-dependency-path: front/package-lock.json
 
-      - name: Install dependencies
-        run: npm ci
+      - name: "Install dependencies (lifecycle scripts disabled: supply-chain hardening)"
+        run: npm ci --ignore-scripts
 
       - name: Dependency audit (report only, see security plan section 5)
         run: |
@@ -114,15 +114,15 @@ jobs:
           npm audit --audit-level=high || echo "::warning::npm audit found vulnerabilities (report only, see job summary)"
 
       - name: Unit tests with coverage (headless Chrome)
-        run: npx ng test --watch=false --browsers=ChromeHeadlessNoSandbox --code-coverage 2>&1 | tee karma.log
+        run: npm test -- --watch=false --browsers=ChromeHeadlessNoSandbox --code-coverage 2>&1 | tee karma.log
 
       - name: Build
-        run: npx ng build
+        run: npm run build
 
       - name: Write job summary
         if: always()
         run: |
-          result=$(tr '\r' '\n' < karma.log 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep -o 'Executed [0-9]* of [0-9]*.*' | tail -1)
+          result=$(tr '\r' '\n' < karma.log 2>/dev/null | sed 's/\x1b\[[0-9;]*[A-Za-z]//g' | grep -o 'Executed [0-9]* of [0-9]*.*' | tail -1)
           coverage="n/a"
           lcov=coverage/microcrm/lcov.info
           if [ -f "$lcov" ]; then
@@ -165,6 +165,7 @@ jobs:
           path: front/coverage/microcrm
 
       - name: Analyse and wait for the quality gate
-        uses: SonarSource/sonarqube-scan-action@v8
+        # Third-party action: pinned by commit SHA (Sonar rule githubactions:S7637). Dependabot updates it.
+        uses: SonarSource/sonarqube-scan-action@59202af334b4ba7b5db01b701b8e79f8b3bef0f4 # v8.5.0
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
