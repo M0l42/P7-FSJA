@@ -1,0 +1,171 @@
+# Continuous integration: build, tests, coverage and SonarQube Cloud analysis.
+# Testing plan: docs/documentation-technique.md, section 4.
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 3 * * *" # nightly, 03:00 UTC, on the default branch
+  workflow_dispatch: # manual re-run from the Actions tab
+
+# Least privilege: jobs can only read the repository.
+permissions:
+  contents: read
+
+# A new push on the same branch cancels the run that is now outdated.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  back:
+    name: Back-end (Gradle)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: back
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Build, test and coverage report
+        run: ./gradlew build jacocoTestReport --no-daemon
+
+      - name: Write job summary
+        if: always()
+        run: |
+          tests=0; failures=0; errors=0; skipped=0
+          for f in build/test-results/test/*.xml; do
+            [ -f "$f" ] || continue
+            tests=$((tests + $(grep -o 'tests="[0-9]*"' "$f" | head -1 | tr -dc 0-9)))
+            failures=$((failures + $(grep -o 'failures="[0-9]*"' "$f" | head -1 | tr -dc 0-9)))
+            errors=$((errors + $(grep -o 'errors="[0-9]*"' "$f" | head -1 | tr -dc 0-9)))
+            skipped=$((skipped + $(grep -o 'skipped="[0-9]*"' "$f" | head -1 | tr -dc 0-9)))
+          done
+          coverage="n/a"
+          report=build/reports/jacoco/test/jacocoTestReport.xml
+          if [ -f "$report" ]; then
+            # The last LINE counter of the report is the project total
+            line=$(grep -o '<counter type="LINE"[^>]*>' "$report" | tail -1)
+            missed=$(echo "$line" | sed 's/.*missed="\([0-9]*\)".*/\1/')
+            covered=$(echo "$line" | sed 's/.*covered="\([0-9]*\)".*/\1/')
+            coverage="$(( 100 * covered / (missed + covered) )) %"
+          fi
+          {
+            echo "### Back-end"
+            echo "| Tests | Passed | Failed | Skipped | Line coverage (JaCoCo) |"
+            echo "|---|---|---|---|---|"
+            echo "| $tests | $((tests - failures - errors - skipped)) | $((failures + errors)) | $skipped | $coverage |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload test and coverage reports (HTML)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: back-reports
+          path: |
+            back/build/reports/tests/test
+            back/build/reports/jacoco/test/html
+          retention-days: 14
+
+      - name: Upload files needed by SonarQube
+        uses: actions/upload-artifact@v7
+        with:
+          name: back-sonar
+          path: |
+            back/build/classes/java
+            back/build/reports/jacoco/test/jacocoTestReport.xml
+          retention-days: 1
+
+  front:
+    name: Front-end (Angular)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: front
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: front/package-lock.json
+
+      - name: "Install dependencies (lifecycle scripts disabled: supply-chain hardening)"
+        run: npm ci --ignore-scripts
+
+      - name: Dependency audit (report only, see security plan section 5)
+        run: |
+          npm audit --json > audit.json || true
+          node -e '
+            const v = require("./audit.json").metadata.vulnerabilities;
+            const rows = ["critical","high","moderate","low"].map(k => `| ${k} | ${v[k]} |`).join("\n");
+            console.log(`### Front-end npm audit (non-blocking)\n| Severity | Count |\n|---|---|\n${rows}\n| **total** | **${v.total}** |`);
+          ' >> "$GITHUB_STEP_SUMMARY"
+          npm audit --audit-level=high || echo "::warning::npm audit found vulnerabilities (report only, see job summary)"
+
+      - name: Unit tests with coverage (headless Chrome)
+        run: npm test -- --watch=false --browsers=ChromeHeadlessNoSandbox --code-coverage 2>&1 | tee karma.log
+
+      - name: Build
+        run: npm run build
+
+      - name: Write job summary
+        if: always()
+        run: |
+          result=$(tr '\r' '\n' < karma.log 2>/dev/null | sed 's/\x1b\[[0-9;]*[A-Za-z]//g' | grep -o 'Executed [0-9]* of [0-9]*.*' | tail -1)
+          coverage="n/a"
+          lcov=coverage/microcrm/lcov.info
+          if [ -f "$lcov" ]; then
+            coverage=$(awk -F: '/^LF:/{found+=$2} /^LH:/{hit+=$2} END{ if (found) printf "%d %%", 100*hit/found }' "$lcov")
+          fi
+          {
+            echo "### Front-end"
+            echo "| Karma result | Line coverage |"
+            echo "|---|---|"
+            echo "| ${result:-n/a} | $coverage |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage report (HTML)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: front-coverage
+          path: front/coverage/microcrm
+          retention-days: 14
+
+  sonar:
+    name: SonarQube Cloud
+    needs: [back, front]
+    runs-on: ubuntu-latest
+    # Pull requests from forks get no secrets (no SONAR_TOKEN): skip instead of failing. Reviewed manually.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # full history: needed to detect new code and blame information
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: back-sonar
+          path: back/build
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: front-coverage
+          path: front/coverage/microcrm
+
+      - name: Analyse and wait for the quality gate
+        # Third-party action: pinned by commit SHA (Sonar rule githubactions:S7637). Dependabot updates it.
+        uses: SonarSource/sonarqube-scan-action@59202af334b4ba7b5db01b701b8e79f8b3bef0f4 # v8.5.0
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
