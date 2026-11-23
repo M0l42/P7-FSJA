@@ -13,6 +13,14 @@ services:
     environment:
       # Only the front end may call the API from a browser (CORS)
       APP_CORS_ORIGINS: http://localhost:4200
+      # Persistent data: HSQLDB stored in files on the microcrm-data volume (not in memory),
+      # so data survives restarts and deployments. Backup / restore: make backup, make restore.
+      SPRING_DATASOURCE_URL: jdbc:hsqldb:file:/data/microcrm;hsqldb.write_delay=false
+      SPRING_DATASOURCE_USERNAME: SA
+      # Create the tables on first start, keep them (and their data) afterwards
+      SPRING_JPA_HIBERNATE_DDL_AUTO: update
+    volumes:
+      - microcrm-data:/data
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/"]
       interval: 10s
@@ -35,3 +43,6 @@ services:
       timeout: 3s
       retries: 5
     restart: unless-stopped
+
+volumes:
+  microcrm-data: # database files of the API; kept by `make down`
