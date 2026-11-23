@@ -486,6 +486,10 @@ L'application manipule des **données personnelles** (noms, e-mails, organisatio
 
 - ✅ Restreindre CORS à l'origine du front, configurée par la variable d'environnement `APP_CORS_ORIGINS`, et supprimer les annotations `@CrossOrigin`. Tests ajoutés : origine autorisée acceptée, autre origine refusée (403).
 - ✅ Verrouiller les dépendances Gradle (`gradle.lockfile`) et contrôler l'intégrité de la feuille de style chargée depuis un CDN (SRI).
+- ✅ **Décision SEC01.** Le premier run de la CD a été bloqué par Trivy : 9 vulnérabilités critiques dans le JAR, venant de Spring Boot 3.2.5 (8 dans Tomcat 10.1.20, 1 dans spring-webmvc 6.1.6). Aucune branche Spring Boot 3.x n'est encore maintenue (3.5 en fin de vie le 30/06/2026).
+  - Passage à Spring Boot 3.5.16, avec Tomcat forcé en 10.1.62 : les 8 vulnérabilités Tomcat sont corrigées.
+  - La vulnérabilité restante (CVE-2026-47884, `XsltView` de spring-webmvc) n'a pas de correctif gratuit en 6.x. MicroCRM n'utilise pas `XsltView`. Elle est acceptée formellement dans `.trivyignore`, avec sa justification et une **date d'expiration (31/01/2027)**, après laquelle la porte Trivy bloque à nouveau.
+  - La correction définitive est la montée vers Spring Boot 4 (plan de mise à jour, §8).
 - Conteneurs non `root`, images de base officielles et figées, scan Trivy bloquant.
 - *Quality gate* SonarQube sur chaque pull request ; revue des *security hotspots*.
 - Dependabot, *secret scanning*, *push protection*, permissions minimales dans les workflows.
