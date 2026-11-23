@@ -133,7 +133,9 @@ Chaque job écrit un **résumé** sur la page du run GitHub Actions : nombre de 
 
 **Protection de `main`.** Une règle (*ruleset*) interdit le push direct sur `main` : toute modification passe par une pull request. La fusion n'est possible que si les trois jobs sont verts. La *quality gate* est donc réellement bloquante (exemple au §5.1).
 
-**Livraison continue (`cd.yml`).** Après chaque push sur `main`, le workflow CD s'exécute, et **uniquement si la CI a réussi** (déclencheur `workflow_run`). Il travaille sur le commit exact validé par la CI :
+**Livraison continue (`cd.yml`).** Après chaque push sur `main`, le job `deliver` de la CI appelle le workflow réutilisable `cd.yml`. Il ne démarre **que si `back`, `front` et `sonar` ont réussi** (`needs`), et travaille donc sur le commit exact validé par la CI.
+
+Une première version déclenchait `cd.yml` avec `workflow_run`, à la fin de la CI. SonarQube l'a signalée (règle `githubactions:S7631`) : récupérer le commit d'un autre workflow peut, dans certaines configurations, exécuter du code venu d'un fork avec accès aux secrets. Le filtre « push sur `main` » rendait ce cas impossible ici, mais la structure en workflow réutilisable supprime le risque à la source. Elle est aussi plus simple à lire, et le workflow de release (étape 6) pourra la réutiliser.
 
 ```text
 CI verte sur main ──► build des 2 images ──► test de fumée ──► scan Trivy ──► publication GHCR

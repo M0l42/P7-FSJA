@@ -1,15 +1,13 @@
 # Continuous delivery: build the Docker images, smoke-test them, scan them with Trivy,
 # then publish them to GitHub Container Registry (GHCR).
-# Runs only after the CI workflow succeeded on a push to main.
+# Reusable workflow: called by the `deliver` job of ci.yml, only on a push to main and only
+# after the back, front and sonar jobs succeeded, so it always runs on the commit CI validated.
 # Deployment plan: docs/documentation-technique.md, sections 3.3, 4 and 5.
 name: CD
 
 on:
-  workflow_run:
-    workflows: [CI]
-    types: [completed]
-    branches: [main]
-  workflow_dispatch: # manual re-run from the Actions tab (publishes the current main)
+  workflow_call:
+  workflow_dispatch: # manual run from the Actions tab (publishes the current main)
 
 permissions:
   contents: read
@@ -26,20 +24,14 @@ jobs:
   publish:
     name: Build, test, scan and publish images
     runs-on: ubuntu-latest
-    # Only after a successful CI run triggered by a push (not by the nightly run or a pull request)
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     permissions:
       contents: read
       packages: write # push to GHCR with the job's GITHUB_TOKEN
       security-events: write # upload Trivy reports to the Security tab
     env:
-      COMMIT_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+      COMMIT_SHA: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ env.COMMIT_SHA }} # exactly the commit CI validated
 
       - name: Set the image tag (sha-<commit>)
         run: echo "TAG=sha-${COMMIT_SHA::7}" >> "$GITHUB_ENV"
