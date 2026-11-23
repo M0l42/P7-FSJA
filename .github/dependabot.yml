@@ -1,0 +1,46 @@
+# Dependabot version updates: weekly PRs that keep dependencies, base images and actions up to date.
+# Security plan: docs/documentation-technique.md, section 5. Each PR goes through CI and the SonarQube gate.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /front
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-and-patch: # one PR for all non-breaking updates; major versions get their own PR
+        update-types: [minor, patch]
+    commit-message:
+      prefix: "build(deps)"
+
+  - package-ecosystem: gradle
+    directory: /back
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      gradle-minor-and-patch:
+        update-types: [minor, patch]
+    commit-message:
+      prefix: "build(deps)"
+
+  - package-ecosystem: docker
+    directory: / # moves to /back and /front with the per-component Dockerfiles (step 4)
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "build(docker)"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      github-actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci"
