@@ -107,26 +107,76 @@ Le détail de chaque étape est donné au §2 ; la conteneurisation et le déplo
 
 ## 2. Étapes de mise en œuvre du pipeline CI/CD
 
+<!-- §2 décrit l'intégration continue (étape 3). À compléter avec cd.yml (étape 5) et release.yml (étape 6). -->
+
 ### 2.1 Structure du pipeline
 
-> TODO :
-> - Étapes principales (build back-end, build front-end, tests, analyse SonarQube, déploiement)
-> - Ordre d'exécution
-> - Justification du choix des actions GitHub
+L'intégration continue est définie dans `.github/workflows/ci.yml`. Elle comporte trois jobs :
+
+```text
+            ┌──────────────────────────┐
+            │ back  (Gradle, Java 17)  │──┐
+push / PR ──┤                          │  ├──► sonar (SonarQube Cloud, quality gate)
+nightly     │ front (Node 20, Angular) │──┘
+            └──────────────────────────┘
+```
+
+| Job | Étapes | Résultat |
+|---|---|---|
+| `back` | Compilation, tests JUnit, rapport de couverture JaCoCo | Rapport de tests et de couverture (HTML), classes compilées + rapport XML pour SonarQube |
+| `front` | `npm ci --ignore-scripts`, `npm audit` (non bloquant), tests Karma en Chrome headless avec couverture, `ng build` | Rapport de couverture (HTML et LCOV), résumé de l'audit npm |
+| `sonar` | Récupère les résultats des deux jobs, analyse le code, attend la *quality gate* | Analyse SonarQube Cloud ; le job échoue si la *quality gate* échoue |
+
+**Ordre d'exécution.** `back` et `front` s'exécutent **en parallèle**, puisqu'ils sont indépendants : le retour est plus rapide (environ 1 minute chacun). `sonar` démarre **après les deux** (`needs: [back, front]`), car il a besoin de leurs classes compilées et de leurs rapports de couverture, transmis sous forme d'artefacts. Si un test échoue, `sonar` ne s'exécute pas et le pipeline est rouge.
+
+Chaque job écrit un **résumé** sur la page du run GitHub Actions : nombre de tests réussis ou échoués, couverture, vulnérabilités npm par sévérité. Les rapports HTML sont téléchargeables en artefacts pendant 14 jours. Les résultats sont ainsi lisibles sans ouvrir les logs.
+
+**Protection de `main`.** Une règle (*ruleset*) interdit le push direct sur `main` : toute modification passe par une pull request. La fusion n'est possible que si les trois jobs sont verts. La *quality gate* est donc réellement bloquante (exemple au §5.1).
+
+**Choix des actions GitHub.** Uniquement des actions maintenues et documentées :
+
+| Action | Rôle | Pourquoi |
+|---|---|---|
+| `actions/checkout`, `actions/setup-java`, `actions/setup-node` | Récupérer le code, installer Java 17 (Temurin) et Node 20 | Actions officielles GitHub ; cache Gradle et npm intégré |
+| `actions/upload-artifact`, `actions/download-artifact` | Transmettre les rapports entre jobs, publier les rapports HTML | Actions officielles GitHub |
+| `SonarSource/sonarqube-scan-action` | Lancer l'analyse SonarQube Cloud | Action officielle de l'éditeur ; épinglée par SHA de commit (§5) |
+
+Les commandes de build et de test restent celles du projet (`./gradlew`, `npm`), appelées directement plutôt que via des actions tierces : la CI exécute exactement ce qu'un développeur lance en local.
 
 ### 2.2 Scripts d'automatisation
 
-> TODO :
-> - Scripts utilisés (Makefile, workflows, scripts Gradle/npm)
-> - Leur rôle dans le pipeline
-> - Comment les exécuter ou les adapter
-> - Pour chaque commande importante : objectif, où elle est définie, quand elle est exécutée (CI, release, local)
+| Commande | Objectif | Où elle est définie | Quand elle s'exécute |
+|---|---|---|---|
+| `./gradlew build jacocoTestReport` | Compiler le back-end, lancer les tests, produire la couverture | `back/build.gradle` (plugins `java`, `jacoco`, Spring Boot) | CI (job `back`), local |
+| `./gradlew dependencies --write-locks` | Mettre à jour `gradle.lockfile` après un changement de dépendance | `back/build.gradle` (`dependencyLocking`) | Local, lors d'une mise à jour |
+| `npm ci --ignore-scripts` | Installer exactement les versions de `package-lock.json`, sans exécuter les scripts d'installation | `front/package-lock.json` | CI (job `front`), local |
+| `npm audit` | Lister les dépendances vulnérables | npm | CI (job `front`, non bloquant) |
+| `npm test -- --watch=false --browsers=ChromeHeadlessNoSandbox --code-coverage` | Lancer les tests unitaires du front avec couverture | `front/package.json`, `front/karma.conf.js` | CI (job `front`), local |
+| `npm run build` | Construire l'application Angular | `front/package.json`, `front/angular.json` | CI (job `front`), local |
+| Analyse SonarQube | Analyser le code et vérifier la *quality gate* | `sonar-project.properties`, job `sonar` | CI (job `sonar`) |
+
+**Adapter le pipeline :**
+- ajouter une étape : un `step` dans le job concerné de `ci.yml` ;
+- changer le périmètre d'analyse : `sonar-project.properties` ;
+- changer les déclencheurs : la section `on:` de `ci.yml` ;
+- changer les seuils de qualité : la *quality gate* dans SonarQube Cloud.
+
+**Mises à jour automatiques.** `.github/dependabot.yml` configure Dependabot. Chaque semaine, il propose des pull requests de mise à jour pour npm, Gradle, les images Docker et les actions GitHub. Elles passent par la même CI que tout autre changement.
 
 ### 2.3 Reproductibilité
 
-> TODO :
-> - Comment relancer le pipeline
-> - Gestion des secrets (sans jamais les afficher)
+**Relancer le pipeline :**
+- automatiquement, à chaque push et pull request, et chaque nuit à 03:00 UTC ;
+- manuellement, depuis l'onglet *Actions* → *CI* → *Run workflow* (déclencheur `workflow_dispatch`) ;
+- pour un run précis, avec *Re-run jobs* (tous les jobs ou seulement ceux en échec).
+
+**Reproduire en local.** Les commandes du §2.2 sont celles de la CI, avec les mêmes versions : Java 17, Node 20, dépendances figées par `package-lock.json` et `gradle.lockfile`.
+
+**Gestion des secrets :**
+- **Un seul secret** : `SONAR_TOKEN`, stocké dans les *GitHub Secrets* du dépôt et dans les *Dependabot secrets* (les pull requests de Dependabot ne reçoivent pas les secrets ordinaires).
+- Il est injecté **uniquement** dans le job `sonar`, et GitHub masque sa valeur dans les logs.
+- Le jeton n'apparaît dans aucun fichier du dépôt. Pour le renouveler : en générer un nouveau dans SonarQube Cloud, puis exécuter `gh secret set SONAR_TOKEN` (qui demande la valeur sans l'afficher), ou passer par *Settings → Secrets and variables → Actions*.
+- Les pull requests venant d'un fork ne reçoivent aucun secret ; le job `sonar` est alors ignoré (§5.2).
 
 ## 3. Plan de conteneurisation et de déploiement
 
@@ -258,6 +308,7 @@ Ce plan définit quels tests sont exécutés automatiquement, à quel moment et 
 |---|---|---|---|---|
 | Test d'intégration | Back-end | `contextLoads` : l'application Spring Boot démarre et sa configuration est valide | JUnit 5, Gradle | CI |
 | Test d'intégration | Back-end | `PersonRepositoryIntegrationTest` : recherche d'une personne par e-mail sur une vraie base (HSQLDB) | JUnit 5, Spring Data | CI |
+| Test d'intégration | Back-end | `CorsConfigurationTest` (2 tests, ajoutés avec la correction CORS) : une requête de l'origine autorisée est acceptée, une autre origine est refusée (403) | JUnit 5, MockMvc | CI |
 | Tests unitaires | Front-end | 8 tests répartis dans 6 fichiers : 2 services (`PersonService`, `OrganizationService`) et 4 composants | Karma, Jasmine, Chrome headless | CI |
 | Couverture de code | Back + front | Part du code exécutée par les tests | JaCoCo (back), Istanbul/LCOV (front) | CI |
 | Analyse statique | Back + front | Bugs, vulnérabilités, *code smells*, duplication (détail au §5) | SonarQube Cloud | CI |
@@ -294,7 +345,7 @@ La **couverture globale** est suivie dans SonarQube comme indicateur, sans bloqu
 - **Qualité** : l'analyse SonarQube et la *quality gate* empêchent l'ajout de code non testé ou présentant des défauts connus.
 - **Non-régression** : les tests existants sont rejoués à chaque push, sur chaque pull request et chaque nuit. Une modification qui casse un comportement existant est détectée avant d'atteindre `main`.
 - **Vérification avant déploiement** : le test de fumée garantit que les images publiées sur GHCR démarrent et répondent. Une version taguée est entièrement retestée avant la release.
-- **Limites assumées** : 10 tests couvrent une petite partie de l'application. L'ajout de tests (contrôleurs REST, scénarios end-to-end) est une recommandation pour les itérations suivantes (§9). Il ne relève pas de la mise en place du pipeline.
+- **Limites assumées** : 12 tests (dont 2 ajoutés avec la correction CORS) couvrent une petite partie de l'application. L'ajout de tests (contrôleurs REST, scénarios end-to-end) est une recommandation pour les itérations suivantes (§9). Il ne relève pas de la mise en place du pipeline.
 
 ## 5. Plan de sécurité
 
@@ -329,11 +380,42 @@ La *quality gate* (§4.3) bloque une pull request qui introduit un bug, une vuln
 
 ### 5.1 Résultats SonarQube
 
-> TODO (après mise en place de la CI) :
-> - Vulnérabilités identifiées
-> - Code smells critiques
-> - Zones de complexité
-> - Couverture des tests
+**Première analyse complète de `main`** (22/11/2026, 1 412 lignes analysées), puis état après les corrections réalisées dans ce projet :
+
+| Mesure | Analyse initiale | Après corrections |
+|---|---|---|
+| Couverture globale | 28,4 % (lignes 30 %, branches 13,8 %) | **38,0 %** (lignes 41,7 %, branches 13,8 %) |
+| Vulnérabilités | 6 (note de sécurité C) | **4**, toutes dans l'ancien Dockerfile racine |
+| Bugs | 20 (note de fiabilité C) | 20 |
+| Code smells | 9 (note de maintenabilité A, ~40 min de dette) | 9 |
+| Security hotspots | 0 | 0 |
+| Duplication | 1,6 % | 1,6 % |
+| Tests back-end | 2 | 4 |
+
+**Vulnérabilités identifiées**
+
+| Règle | Fichier | Problème | Traitement |
+|---|---|---|---|
+| `docker:S6505`, `docker:S8543` (×3) | `Dockerfile` (racine) | `npm ci` sans `--ignore-scripts`, `npx` sans version fixée | Fichier remplacé à l'étape 4 (§3.1) |
+| `docker:S6471` | `Dockerfile` (racine) | Image Alpine exécutée en `root` | Utilisateur non privilégié (§3.1) |
+| `text:S8569` | `back/build.gradle` | Versions de dépendances non verrouillées | **Corrigé** : `gradle.lockfile` |
+| `Web:S5725` | `front/src/index.html` | Feuille de style Bulma chargée depuis un CDN sans contrôle d'intégrité | **Corrigé** : empreinte SRI `sha384` |
+
+**Code smells et bugs principaux.** Ils concernent le code applicatif du front, hors du périmètre du pipeline. Ils sont transmis à l'équipe de développement (§5.3) :
+- 12 promesses dont les erreurs ne sont jamais traitées (`fetchAll().then(...)` sans `.catch`). Une erreur de l'API passe inaperçue pour l'utilisateur.
+- 7 champs de formulaire sans libellé associé et un tableau sans en-têtes : problèmes d'accessibilité.
+- 1 smell **critique** (`typescript:S7059`) : un appel asynchrone dans le constructeur de `PersonDetailsComponent`.
+
+**Zones de complexité.** La complexité reste faible (114 en cyclomatique, 18 en cognitive pour tout le projet). Les composants les plus lourds sont `person-details` (78 lignes TypeScript, 203 lignes de template) et `organization-details`. Ce sont aussi les moins couverts (27 % et 36 %).
+
+**Couverture des tests.** La première mesure était faussée : les fichiers de test eux-mêmes étaient comptés comme du code à couvrir, à 0 %. Après les avoir exclus de la mesure et ajouté des tests CORS, la couverture passe de 28,4 % à 38 %. Elle reste faible, notamment sur les services front (12 à 15 %). La *quality gate* impose désormais 80 % sur tout nouveau code.
+
+**Ce que la mise en place a montré**
+- **Le pipeline s'est contrôlé lui-même.** La première analyse a signalé 6 vulnérabilités dans le workflow `ci.yml` : scripts npm exécutés à l'installation, `npx` sans version, action tierce référencée par tag. Elles ont été corrigées avant la première fusion. Le choix d'épingler les actions tierces par SHA a été révisé suite à cette analyse.
+- **La *quality gate* est réellement bloquante.** La pull request de correction CORS a d'abord été bloquée à 25 % de couverture du nouveau code : son nouveau fichier de test était encore compté comme du code à couvrir. Après fusion de la correction de mesure, la couverture du nouveau code est de 100 % et la fusion a été autorisée.
+- **L'analyse automatique ne remplace pas la revue manuelle.** SonarQube n'a pas signalé la configuration CORS ouverte à toutes les origines (0 *security hotspot*). Elle a été détectée par revue de code et corrigée (§5.2).
+
+<!-- Annexes : captures du tableau de bord SonarQube (avant/après), de la PR bloquée par la quality gate, d'un résumé de run. -->
 
 ### 5.2 Analyse des risques
 
@@ -366,7 +448,8 @@ L'application manipule des **données personnelles** (noms, e-mails, organisatio
 
 **Actions immédiates (réalisées dans ce projet)**
 
-- Restreindre CORS à l'origine du front, configurée par variable d'environnement dans `docker-compose.yml`, et supprimer les annotations `@CrossOrigin`.
+- ✅ Restreindre CORS à l'origine du front, configurée par la variable d'environnement `APP_CORS_ORIGINS`, et supprimer les annotations `@CrossOrigin`. Tests ajoutés : origine autorisée acceptée, autre origine refusée (403).
+- ✅ Verrouiller les dépendances Gradle (`gradle.lockfile`) et contrôler l'intégrité de la feuille de style chargée depuis un CDN (SRI).
 - Conteneurs non `root`, images de base officielles et figées, scan Trivy bloquant.
 - *Quality gate* SonarQube sur chaque pull request ; revue des *security hotspots*.
 - Dependabot, *secret scanning*, *push protection*, permissions minimales dans les workflows.
@@ -377,6 +460,7 @@ L'application manipule des **données personnelles** (noms, e-mails, organisatio
 - Décision de la direction technique sur l'authentification : comptes internes ou SSO de l'entreprise, rôles nécessaires.
 - Traiter les 5 vulnérabilités npm critiques : `npm audit fix` pour celles qui le permettent, puis montée de version d'Angular vers une version maintenue.
 - Passer Spring Boot sur une version maintenue (branche 3.x supportée).
+- Transmettre à l'équipe de développement les 20 bugs relevés par SonarQube dans le front : gestion des erreurs des promesses, accessibilité des formulaires.
 
 **Long terme**
 
