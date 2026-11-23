@@ -46,9 +46,9 @@ Aujourd'hui, la compilation, les tests et le déploiement sont faits à la main.
 | Outil | Version | Rôle |
 |---|---|---|
 | Java | 17 (cible de compilation) | Langage du back-end |
-| Spring Boot | 3.2.5 | Framework de l'API REST (Spring Data REST, JPA) |
+| Spring Boot | 4.2.0 (3.2.5 au départ, voir §5.3) | Framework de l'API REST (Spring Data REST, JPA) |
 | HSQLDB | gérée par Spring Boot | Base de données en mémoire |
-| Gradle (wrapper) | 8.7 | Build, tests et packaging du back-end |
+| Gradle (wrapper) | 8.14.8 (8.7 au départ) | Build, tests et packaging du back-end |
 | Node.js | 22 LTS | Environnement de build du front-end (CI et image Docker) |
 | Angular / Angular CLI | 17.3.8 / 17.3.7 | Framework et outillage du front-end |
 | TypeScript | 5.4 | Langage du front-end |
@@ -471,7 +471,7 @@ L'application manipule des **données personnelles** (noms, e-mails, organisatio
 |---|---|---|---|---|
 | A01 – Broken Access Control | L'API n'a **aucune authentification** : quiconque atteint le port 8080 peut lire, créer, modifier et supprimer toutes les données | Fuite ou destruction de données personnelles | **Élevée** | Remonté à la direction technique, priorité n°1 |
 | A05 – Security Misconfiguration | CORS autorise **toutes les origines** (`allowedOrigins("*")` et `@CrossOrigin` sur les deux dépôts REST) | N'importe quel site web peut appeler l'API depuis le navigateur d'un utilisateur | Moyenne | Corrigé dans ce projet |
-| A06 – Vulnerable and Outdated Components | 90 vulnérabilités npm (5 critiques). Angular 17 et Spring Boot 3.2 ne sont plus maintenus | Failles connues et publiques, sans correctif côté éditeur | **Élevée** | Plan de mise à jour (§8) |
+| A06 – Vulnerable and Outdated Components | 90 vulnérabilités npm (5 critiques), Angular 17 n'est plus maintenu. Côté back, Spring Boot 3.2 n'était plus maintenu non plus | Failles connues et publiques, sans correctif côté éditeur | **Élevée** | Back : corrigé (Spring Boot 4.2, §5.3). Front : plan de mise à jour (§8) |
 | A02 – Cryptographic Failures | L'API est servie en HTTP : les données circulent en clair | Interception sur le réseau | Moyenne | HTTPS via Caddy en production |
 | A09 – Security Logging and Monitoring Failures | Pas de journalisation centralisée ni d'alerte | Une attaque passerait inaperçue | Moyenne | Partie 2 (stack ELK) |
 
@@ -498,6 +498,14 @@ L'application manipule des **données personnelles** (noms, e-mails, organisatio
   - Passage à Spring Boot 3.5.16, avec Tomcat forcé en 10.1.62 : les 8 vulnérabilités Tomcat sont corrigées.
   - Deux vulnérabilités de spring-webmvc 6.2 n'ont pas de correctif gratuit en 6.x : CVE-2026-47884 (`XsltView`) et CVE-2026-47890 (Server-Sent Events avec fragments de vue). La seconde n'est apparue qu'après le passage en 6.2. MicroCRM n'utilise ni `XsltView`, ni Server-Sent Events, ni fragments : l'API ne sert que du JSON, ce qui a été vérifié dans le code. Elles sont acceptées formellement dans `.trivyignore`, chacune avec sa justification et une **date d'expiration (31/01/2027)**, après laquelle la porte Trivy bloque à nouveau.
   - La correction définitive est la montée vers Spring Boot 4 (plan de mise à jour, §8).
+- ✅ **Montée vers Spring Boot 4.2 (SEC02),** conseillée par le mentor : mettre à jour les dépendances est l'une des premières actions quand on automatise un pipeline. Pour limiter le risque, elle a été faite en deux changements séparés.
+  1. **Gradle 8.7 → 8.14.8,** version minimale pour Spring Boot 4, avec l'empreinte de la distribution vérifiée. Le fichier de verrouillage a refusé un changement silencieux de version de JaCoCo, qui a été accepté explicitement.
+  2. **Spring Boot 3.5.16 → 4.2.0** : Spring Framework 7.1, Tomcat 11, Hibernate 7, Jackson 3. Le code applicatif compile sans modification. Seuls les imports des annotations de test ont changé, car elles sont déplacées dans des modules dédiés. Le forçage de Tomcat et les deux acceptations de `.trivyignore` sont supprimés : ces vulnérabilités sont corrigées.
+- **Preuve de non-régression :**
+  - les tests passent ;
+  - la réponse de l'API à 16 appels (lecture, création, modification, suppression, cas 404, CORS) a été enregistrée avant la montée de version, puis comparée après : **elle est identique** ;
+  - vérification de l'application dans un navigateur.
+- **Un comportement de test a changé :** avec Spring Boot 4, MockMvc répond 200 sans en-tête CORS à une requête *preflight* venant d'une origine non autorisée, alors que le vrai serveur répond 403. Le test vérifie maintenant la vraie garantie de sécurité, l'absence de l'en-tête `Access-Control-Allow-Origin`. Le 403 est vérifié sur le vrai conteneur par le test de fumée de `cd.yml`.
 - Conteneurs non `root`, images de base officielles et figées, scan Trivy bloquant.
 - *Quality gate* SonarQube sur chaque pull request ; revue des *security hotspots*.
 - Dependabot, *secret scanning*, *push protection*, permissions minimales dans les workflows.
@@ -507,7 +515,7 @@ L'application manipule des **données personnelles** (noms, e-mails, organisatio
 
 - Décision de la direction technique sur l'authentification : comptes internes ou SSO de l'entreprise, rôles nécessaires.
 - Traiter les 5 vulnérabilités npm critiques : `npm audit fix` pour celles qui le permettent, puis montée de version d'Angular vers une version maintenue.
-- Passer Spring Boot sur une version maintenue (branche 3.x supportée).
+- ✅ Passer Spring Boot sur une version maintenue : fait, en 4.2 (voir ci-dessus).
 - Transmettre à l'équipe de développement les 20 bugs relevés par SonarQube dans le front : gestion des erreurs des promesses, accessibilité des formulaires.
 
 **Long terme**

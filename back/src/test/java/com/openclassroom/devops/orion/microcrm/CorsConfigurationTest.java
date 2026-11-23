@@ -2,7 +2,7 @@ package com.openclassroom.devops.orion.microcrm;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.HttpHeaders;
 import org.springframework.test.web.servlet.MockMvc;
@@ -30,12 +30,17 @@ class CorsConfigurationTest {
                 .andExpect(header().string(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN, "http://localhost:4200"));
     }
 
+    /**
+     * The security guarantee is the absence of Access-Control-Allow-Origin: without it, the browser blocks the call.
+     * The status code is not asserted here: since Spring Boot 4, MockMvc answers this preflight with a generic
+     * handler (200, no CORS header) while the real server answers 403. The 403 is checked on the real container
+     * by the smoke test of cd.yml.
+     */
     @Test
-    void preflightFromOtherOriginIsRejected() throws Exception {
+    void preflightFromOtherOriginGetsNoCorsHeader() throws Exception {
         mockMvc.perform(options("/persons")
                         .header(HttpHeaders.ORIGIN, "https://evil.example.com")
                         .header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "DELETE"))
-                .andExpect(status().isForbidden())
                 .andExpect(header().doesNotExist(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN));
     }
 }
