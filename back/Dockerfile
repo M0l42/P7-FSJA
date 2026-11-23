@@ -19,7 +19,8 @@ RUN ./gradlew bootJar --no-daemon
 FROM eclipse-temurin:17.0.21.1_2-jre-alpine
 
 # Unprivileged user: the application never runs as root
-RUN addgroup -S app && adduser -S -G app app
+RUN addgroup -S app && adduser -S -G app app \
+    && mkdir /data && chown app:app /data # database files (volume microcrm-data)
 WORKDIR /app
 COPY --from=build /src/build/libs/microcrm-*.jar /app/app.jar
 USER app

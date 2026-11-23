@@ -294,7 +294,7 @@ L'image du front est un peu plus lourde : l'image officielle `caddy` remplace un
 | `back` | `./back` | `ghcr.io/m0l42/microcrm-back` | `8080 → 8080` | `APP_CORS_ORIGINS=http://localhost:4200` |
 | `front` | `./front` | `ghcr.io/m0l42/microcrm-front` | `4200 → 8080` | `SITE_ADDRESS=:8080` |
 
-Il n'y a pas de service de base de données : l'API utilise HSQLDB **en mémoire**, intégrée au processus Java. Les données sont perdues à chaque redémarrage (voir §7).
+Il n'y a pas de service de base de données séparé : l'API utilise HSQLDB, intégrée au processus Java. Ses fichiers sont stockés sur le volume Docker `microcrm-data`, ce qui conserve les données lors des redémarrages et des déploiements (§7). Au départ, la base était en mémoire et perdue à chaque redémarrage.
 
 Le port 8080 de l'API est publié sur l'hôte, car le front appelle l'API **depuis le navigateur**, à l'adresse `http://localhost:8080` définie dans `front/src/app/config.ts`. L'origine autorisée par CORS est donc celle du front, `http://localhost:4200`.
 
@@ -554,18 +554,60 @@ L'application manipule des **données personnelles** (noms, e-mails, organisatio
 
 ### 7.1 Ce qui doit être sauvegardé
 
-> TODO :
-> - Données (si applicable : la base HSQLDB actuelle est en mémoire)
-> - Fichiers de configuration
-> - Artefacts de build
+**Constat de départ.** La base HSQLDB fonctionnait **en mémoire** : elle vivait dans la mémoire vive du processus Java. Le test a été fait : une personne créée par l'API disparaît après un simple redémarrage du conteneur. Or chaque déploiement recrée le conteneur, donc **chaque release effaçait les données du CRM**. La livraison continue rendait ce défaut plus fréquent. Correction apportée dans ce projet, par configuration et sans modifier le code Java :
+- HSQLDB stocke désormais sa base dans des **fichiers** (`jdbc:hsqldb:file:/data/microcrm`) ;
+- ces fichiers sont sur un **volume Docker** nommé `microcrm-data` ;
+- les tables sont créées au premier démarrage puis conservées (`ddl-auto=update`) ;
+- les tests automatisés gardent une base en mémoire, isolée.
+
+| Élément | Où il se trouve | Sauvegarde |
+|---|---|---|
+| **Données du CRM** (personnes, organisations) | Volume Docker `microcrm-data` | `make backup` : archive `backups/microcrm-<date>.tar.gz` |
+| **Code, configuration, workflows, documentation** | Dépôt Git sur GitHub | Historique Git ; chaque release est un tag `vX.Y.Z` |
+| **Images Docker** | GitHub Container Registry | Une image immuable par version (`X.Y.Z`) et par commit (`sha-<commit>`) |
+| **Artefacts de build** (JAR, build Angular) | *GitHub Releases* | Fichiers attachés à chaque release, avec leurs empreintes SHA-256 |
+| **Secret `SONAR_TOKEN`** | *GitHub Secrets* | Non sauvegardé, volontairement : en cas de perte, on en génère un nouveau dans SonarQube Cloud |
 
 ### 7.2 Procédure de sauvegarde
 
-> TODO : format, fréquence, outils utilisés (scripts, commandes simples).
+```bash
+make backup
+```
+
+1. Arrête l'API quelques secondes, pour copier des fichiers cohérents ; le front reste disponible.
+2. Archive le contenu du volume dans `backups/microcrm-AAAAMMJJ-HHMMSS.tar.gz`. Le dossier `backups/` est exclu de Git : il contient des données personnelles.
+3. Redémarre l'API.
+
+- **Format** : archive `tar.gz` des fichiers HSQLDB (`microcrm.script`, `microcrm.properties`, `microcrm.log`).
+- **Fréquence recommandée** :
+  - une sauvegarde quotidienne, planifiée sur le serveur (par exemple avec `cron`, la nuit) ;
+  - une sauvegarde **avant chaque mise en production** d'une nouvelle version ;
+  - les 14 dernières archives sont conservées.
+- **Stockage** : copier les archives hors du serveur (stockage objet ou autre machine). Une sauvegarde sur le même disque ne protège pas d'une panne de ce disque.
 
 ### 7.3 Procédure de restauration
 
-> TODO : scénario d'incident, étapes pour revenir à une version stable, limitations éventuelles.
+**Scénario 1 : perte ou corruption des données** (volume supprimé, disque remplacé, données altérées).
+1. Arrêter l'application : `docker compose down`.
+2. Si le volume existe encore, le supprimer **volontairement** : `docker volume rm <projet>_microcrm-data`. Cette étape est laissée à une personne, et non à un script, pour qu'un écrasement de données ne soit jamais accidentel.
+3. Restaurer : `make restore FILE=backups/microcrm-<date>.tar.gz`. La commande **refuse de s'exécuter si la base n'est pas vide**, puis redémarre l'API.
+
+Procédure testée : création d'une personne, sauvegarde, suppression du volume, restauration. La personne est bien présente après la restauration.
+
+**Scénario 2 : une nouvelle version pose problème.** On revient à la version précédente, dont les images sont conservées sur GHCR :
+
+```bash
+TAG=0.1.0 docker compose pull
+TAG=0.1.0 docker compose up -d
+```
+
+Les données sont conservées, puisqu'elles sont sur le volume et non dans l'image. Si la nouvelle version avait modifié le schéma de la base, on restaure aussi la sauvegarde faite juste avant la mise en production.
+
+**Limitations :**
+- la sauvegarde implique une courte interruption de l'API ;
+- HSQLDB convient à cette application de démonstration, mais pas à une production avec plusieurs utilisateurs simultanés ;
+- la cible à long terme est **PostgreSQL**, avec des sauvegardes à chaud (`pg_dump`) et la possibilité de restaurer à un instant précis ;
+- les sauvegardes ne sont pas chiffrées : elles doivent être stockées dans un emplacement à accès restreint, car elles contiennent des données personnelles (RGPD).
 
 ## 8. Plan de mise à jour
 
