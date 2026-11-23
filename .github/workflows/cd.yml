@@ -7,6 +7,12 @@ name: CD
 
 on:
   workflow_call:
+    inputs:
+      version:
+        description: "Release version (X.Y.Z): images are tagged X.Y.Z instead of sha-<commit> + latest"
+        type: string
+        required: false
+        default: ""
   workflow_dispatch: # manual run from the Actions tab (publishes the current main)
 
 permissions:
@@ -30,11 +36,19 @@ jobs:
       security-events: write # upload Trivy reports to the Security tab
     env:
       COMMIT_SHA: ${{ github.sha }}
+      RELEASE_VERSION: ${{ inputs.version }}
     steps:
       - uses: actions/checkout@v7
 
-      - name: Set the image tag (sha-<commit>)
-        run: echo "TAG=sha-${COMMIT_SHA::7}" >> "$GITHUB_ENV"
+      - name: Set the image tag (X.Y.Z for a release, sha-<commit> + latest for main)
+        run: |
+          if [ -n "$RELEASE_VERSION" ]; then
+            echo "TAG=$RELEASE_VERSION" >> "$GITHUB_ENV"
+            echo "PUSH_LATEST=false" >> "$GITHUB_ENV"
+          else
+            echo "TAG=sha-${COMMIT_SHA::7}" >> "$GITHUB_ENV"
+            echo "PUSH_LATEST=true" >> "$GITHUB_ENV"
+          fi
 
       - name: Build images
         run: docker compose build
@@ -113,13 +127,15 @@ jobs:
           REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$REGISTRY_USER" --password-stdin
 
-      - name: Push images (sha-<commit> and latest)
+      - name: Push images
         run: |
           for component in back front; do
             image="$IMAGE_PREFIX-$component"
             docker push "$image:$TAG"
-            docker tag "$image:$TAG" "$image:latest"
-            docker push "$image:latest"
+            if [ "$PUSH_LATEST" = "true" ]; then
+              docker tag "$image:$TAG" "$image:latest"
+              docker push "$image:latest"
+            fi
           done
 
       - name: Write job summary
@@ -131,7 +147,8 @@ jobs:
             for component in back front; do
               image="$IMAGE_PREFIX-$component"
               digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$image:$TAG" | cut -d@ -f2)
-              echo "| \`$image\` | \`$TAG\`, \`latest\` | \`$digest\` |"
+              tags="\`$TAG\`"; [ "$PUSH_LATEST" = "true" ] && tags="$tags, \`latest\`"
+              echo "| \`$image\` | $tags | \`$digest\` |"
             done
           } >> "$GITHUB_STEP_SUMMARY"
 

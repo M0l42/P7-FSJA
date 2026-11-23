@@ -1,0 +1,148 @@
+# Release: a version tag vX.Y.Z (pushed by a person, the deliberate validation step) produces
+# - Docker images tagged X.Y.Z on GHCR (same build, smoke test and Trivy gate as cd.yml),
+# - a GitHub Release with the back-end JAR and the Angular build attached.
+# Deployment plan: docs/documentation-technique.md, section 3.3.
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Check the tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # needed to check that the tagged commit is on main
+
+      - name: Read and validate the version
+        id: version
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          if ! [[ "$TAG_NAME" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "::error::Tag $TAG_NAME is not of the form vX.Y.Z"; exit 1
+          fi
+          echo "version=${BASH_REMATCH[1]}" >> "$GITHUB_OUTPUT"
+
+      - name: Only release commits that are on main (validated by CI and the quality gate)
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main \
+            || { echo "::error::The tagged commit is not on main"; exit 1; }
+
+  back:
+    name: Back-end build and tests
+    needs: version
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: back
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+      - name: Build and test
+        run: ./gradlew build --no-daemon
+      - name: Name the JAR with the version
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: cp build/libs/microcrm-*-SNAPSHOT.jar "microcrm-back-$VERSION.jar"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-back
+          path: back/microcrm-back-*.jar
+          retention-days: 1
+
+  front:
+    name: Front-end build and tests
+    needs: version
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: front
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: front/package-lock.json
+      - name: "Install dependencies (lifecycle scripts disabled: supply-chain hardening)"
+        run: npm ci --ignore-scripts
+      - name: Unit tests (headless Chrome)
+        run: npm test -- --watch=false --browsers=ChromeHeadlessNoSandbox
+      - name: Build
+        run: npm run build
+      - name: Archive the build with the version
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: (cd dist/microcrm/browser && zip -qr "../../../microcrm-front-$VERSION.zip" .)
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-front
+          path: front/microcrm-front-*.zip
+          retention-days: 1
+
+  images:
+    name: Images
+    needs: [version, back, front]
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    uses: ./.github/workflows/cd.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+
+  release:
+    name: GitHub Release
+    needs: [version, back, front, images] # only if the images passed the smoke test and the Trivy gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist
+
+      - name: Checksums
+        run: (cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          {
+            echo "## Docker images"
+            echo '```shell'
+            echo "TAG=$VERSION docker compose pull"
+            echo "TAG=$VERSION docker compose up -d"
+            echo '```'
+            echo "- \`ghcr.io/m0l42/microcrm-back:$VERSION\`"
+            echo "- \`ghcr.io/m0l42/microcrm-front:$VERSION\`"
+          } > notes.md
+          gh release create "$TAG_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "MicroCRM $VERSION" \
+            --notes-file notes.md \
+            --generate-notes \
+            --verify-tag

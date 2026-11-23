@@ -107,7 +107,7 @@ Le détail de chaque étape est donné au §2 ; la conteneurisation et le déplo
 
 ## 2. Étapes de mise en œuvre du pipeline CI/CD
 
-<!-- §2 décrit l'intégration continue (étape 3) et la livraison continue (étape 5). À compléter avec release.yml (étape 6). -->
+<!-- §2 décrit l'intégration continue (étape 3), la livraison continue (étape 5) et la release (étape 6). -->
 
 ### 2.1 Structure du pipeline
 
@@ -152,6 +152,14 @@ CI verte sur main ──► build des 2 images ──► test de fumée ──�
 | Publication | `docker login` avec le `GITHUB_TOKEN` du job, `docker push` des tags `sha-<commit>` et `latest` | — |
 
 La publication utilise directement la CLI `docker` plutôt que des actions tierces (`docker/login-action`, `docker/build-push-action`). C'est une dépendance de moins à faire confiance, et ce sont les mêmes commandes qu'en local. Le run nightly et les pull requests ne publient jamais d'image.
+
+**Release (`release.yml`).** Une personne pousse un tag `vX.Y.Z` : c'est l'étape de validation volontaire. Le workflow :
+1. vérifie que le tag a la forme `vX.Y.Z` et que le commit tagué est **sur `main`**, donc déjà validé par la CI et la *quality gate* ;
+2. relance les tests et construit le back-end et le front-end, en parallèle ;
+3. appelle `cd.yml` avec la version : mêmes build, test de fumée et porte Trivy, mais les images sont publiées avec le tag `X.Y.Z` (et non `latest`) ;
+4. seulement si tout a réussi, crée la *GitHub Release* avec le JAR (`microcrm-back-X.Y.Z.jar`), l'archive du build Angular (`microcrm-front-X.Y.Z.zip`), un fichier d'empreintes `SHA256SUMS.txt` et les commandes de déploiement.
+
+La release est créée avec la CLI `gh` préinstallée sur les runners, sans action tierce.
 
 **Choix des actions GitHub.** Uniquement des actions maintenues et documentées :
 
@@ -488,7 +496,7 @@ L'application manipule des **données personnelles** (noms, e-mails, organisatio
 - ✅ Verrouiller les dépendances Gradle (`gradle.lockfile`) et contrôler l'intégrité de la feuille de style chargée depuis un CDN (SRI).
 - ✅ **Décision SEC01.** Le premier run de la CD a été bloqué par Trivy : 9 vulnérabilités critiques dans le JAR, venant de Spring Boot 3.2.5 (8 dans Tomcat 10.1.20, 1 dans spring-webmvc 6.1.6). Aucune branche Spring Boot 3.x n'est encore maintenue (3.5 en fin de vie le 30/06/2026).
   - Passage à Spring Boot 3.5.16, avec Tomcat forcé en 10.1.62 : les 8 vulnérabilités Tomcat sont corrigées.
-  - La vulnérabilité restante (CVE-2026-47884, `XsltView` de spring-webmvc) n'a pas de correctif gratuit en 6.x. MicroCRM n'utilise pas `XsltView`. Elle est acceptée formellement dans `.trivyignore`, avec sa justification et une **date d'expiration (31/01/2027)**, après laquelle la porte Trivy bloque à nouveau.
+  - Deux vulnérabilités de spring-webmvc 6.2 n'ont pas de correctif gratuit en 6.x : CVE-2026-47884 (`XsltView`) et CVE-2026-47890 (Server-Sent Events avec fragments de vue). La seconde n'est apparue qu'après le passage en 6.2. MicroCRM n'utilise ni `XsltView`, ni Server-Sent Events, ni fragments : l'API ne sert que du JSON, ce qui a été vérifié dans le code. Elles sont acceptées formellement dans `.trivyignore`, chacune avec sa justification et une **date d'expiration (31/01/2027)**, après laquelle la porte Trivy bloque à nouveau.
   - La correction définitive est la montée vers Spring Boot 4 (plan de mise à jour, §8).
 - Conteneurs non `root`, images de base officielles et figées, scan Trivy bloquant.
 - *Quality gate* SonarQube sur chaque pull request ; revue des *security hotspots*.
