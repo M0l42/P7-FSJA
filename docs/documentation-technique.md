@@ -50,8 +50,8 @@ Aujourd'hui, la compilation, les tests et le déploiement sont faits à la main.
 | HSQLDB | gérée par Spring Boot | Base de données en mémoire |
 | Gradle (wrapper) | 8.14.8 (8.7 au départ) | Build, tests et packaging du back-end |
 | Node.js | 22 LTS | Environnement de build du front-end (CI et image Docker) |
-| Angular / Angular CLI | 17.3.8 / 17.3.7 | Framework et outillage du front-end |
-| TypeScript | 5.4 | Langage du front-end |
+| Angular / Angular CLI | 22.3.0 (17.3.8 au départ, voir §5.3) | Framework et outillage du front-end |
+| TypeScript | 6.0 (5.4 au départ) | Langage du front-end |
 | Karma / Jasmine | 6.4 / 5.1 | Tests unitaires du front-end (Chrome headless) |
 | Caddy | image officielle | Serveur web du front-end dans le conteneur |
 | Docker / Docker Compose | 29.1 / 2.40 (poste local) | Conteneurisation et orchestration locale |
@@ -80,7 +80,7 @@ Points relevés, traités dans la suite du projet :
 1. **`back/gradlew` n'était pas exécutable dans Git** (mode `100644`) : `./gradlew` et le build Docker échouaient avec « Permission denied ». Le même échec se serait produit sur les runners GitHub Actions. Corrigé par `git update-index --chmod=+x back/gradlew`.
 2. **Les deux conteneurs tournent en `root`** : les nouveaux Dockerfiles utiliseront un utilisateur non privilégié (§3.1, §5).
 3. **Versions Java incohérentes** : compilation en Java 17, mais exécution sur un JRE 21 dans l'image existante.
-4. **Version de Node** : Angular 17 ne supporte officiellement que Node 18 et 20, tous deux en fin de vie (Node 20 depuis le 30/04/2026). La CI et le Dockerfile utilisent **Node 22 LTS**, maintenu jusqu'en avril 2027 : c'est une version au-dessus de la liste officielle d'Angular 17, mais la CI vérifie à chaque exécution que le build et les tests fonctionnent. La montée de version d'Angular, qui rétablit un support officiel, relève du plan de mise à jour (§8).
+4. **Version de Node** : Angular 17 ne supporte officiellement que Node 18 et 20, tous deux en fin de vie (Node 20 depuis le 30/04/2026). La CI et le Dockerfile utilisent **Node 22 LTS**, maintenu jusqu'en avril 2027 : c'est une version au-dessus de la liste officielle d'Angular 17, mais la CI vérifie à chaque exécution que le build et les tests fonctionnent. La montée de version d'Angular, qui rétablit un support officiel, relève du plan de mise à jour (§8). *Mise à jour : depuis la montée vers Angular 22, Node 22 fait partie des versions officiellement supportées.*
 5. **Dépendances npm vulnérables et couverture de tests faible** : à suivre dans SonarQube (§5.1) et dans le plan de remédiation (§5.3).
 6. **Dockerfile racine unique à cinq cibles** : base `alpine:3.19` en fin de vie, `FROM node` sans version, `EXPOSE 4200` sur le back-end alors que l'API écoute sur 8080. Il sera remplacé par un Dockerfile par composant (§3.1).
 
@@ -471,7 +471,7 @@ L'application manipule des **données personnelles** (noms, e-mails, organisatio
 |---|---|---|---|---|
 | A01 – Broken Access Control | L'API n'a **aucune authentification** : quiconque atteint le port 8080 peut lire, créer, modifier et supprimer toutes les données | Fuite ou destruction de données personnelles | **Élevée** | Remonté à la direction technique, priorité n°1 |
 | A05 – Security Misconfiguration | CORS autorise **toutes les origines** (`allowedOrigins("*")` et `@CrossOrigin` sur les deux dépôts REST) | N'importe quel site web peut appeler l'API depuis le navigateur d'un utilisateur | Moyenne | Corrigé dans ce projet |
-| A06 – Vulnerable and Outdated Components | 90 vulnérabilités npm (5 critiques), Angular 17 n'est plus maintenu. Côté back, Spring Boot 3.2 n'était plus maintenu non plus | Failles connues et publiques, sans correctif côté éditeur | **Élevée** | Back : corrigé (Spring Boot 4.2, §5.3). Front : plan de mise à jour (§8) |
+| A06 – Vulnerable and Outdated Components | 90 vulnérabilités npm (5 critiques), Angular 17 et Spring Boot 3.2 n'étaient plus maintenus | Failles connues et publiques, sans correctif côté éditeur | **Élevée** | **Corrigé** : Spring Boot 4.2 et Angular 22, 0 vulnérabilité npm (§5.3) |
 | A02 – Cryptographic Failures | L'API est servie en HTTP : les données circulent en clair | Interception sur le réseau | Moyenne | HTTPS via Caddy en production |
 | A09 – Security Logging and Monitoring Failures | Pas de journalisation centralisée ni d'alerte | Une attaque passerait inaperçue | Moyenne | Partie 2 (stack ELK) |
 
@@ -506,6 +506,14 @@ L'application manipule des **données personnelles** (noms, e-mails, organisatio
   - la réponse de l'API à 16 appels (lecture, création, modification, suppression, cas 404, CORS) a été enregistrée avant la montée de version, puis comparée après : **elle est identique** ;
   - vérification de l'application dans un navigateur.
 - **Un comportement de test a changé :** avec Spring Boot 4, MockMvc répond 200 sans en-tête CORS à une requête *preflight* venant d'une origine non autorisée, alors que le vrai serveur répond 403. Le test vérifie maintenant la vraie garantie de sécurité, l'absence de l'en-tête `Access-Control-Allow-Origin`. Le 403 est vérifié sur le vrai conteneur par le test de fumée de `cd.yml`.
+- ✅ **Montée vers Angular 22 (SEC03),** même démarche que pour Spring Boot, une version majeure à la fois (17 → 18 → 19 → 20 → 21 → 22) :
+  - à chaque étape : les migrations officielles (`ng update`), puis les tests et le build, puis un commit séparé. Les migrations ont surtout converti les gabarits vers la nouvelle syntaxe de contrôle (`*ngFor` → `@for`, `*ngIf` → `@if`) et remplacé les modules HTTP dépréciés dans les tests ;
+  - puis `npm audit fix` pour les corrections sans rupture. **Résultat : 0 vulnérabilité npm**, contre 90 au départ (dont 5 critiques).
+- **Preuve de non-régression :**
+  - les 8 tests passent, et la couverture est identique (30,76 % des lignes) : le même code est exercé ;
+  - le rendu des 4 routes de l'application (texte visible, 13 champs de formulaire, 14 liens) a été capturé avant la montée de version, puis comparé sur la nouvelle image Docker : **il est identique** ;
+  - aucune erreur dans la console du navigateur.
+- **Piège rencontré : la version de npm.** Le fichier `package-lock.json` avait d'abord été généré avec npm 11 (Node 24 sur le poste local). L'image Docker et la CI utilisent npm 10 (Node 22), qui l'a refusé (`npm ci` : fichier non synchronisé). Le fichier a été régénéré dans l'image `node:22` du pipeline : un outil de build doit être le même en local et en CI.
 - Conteneurs non `root`, images de base officielles et figées, scan Trivy bloquant.
 - *Quality gate* SonarQube sur chaque pull request ; revue des *security hotspots*.
 - Dependabot, *secret scanning*, *push protection*, permissions minimales dans les workflows.
