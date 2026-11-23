@@ -3,7 +3,7 @@
 # Containerization plan: docs/documentation-technique.md, section 3.1.
 
 # ---- Build stage ----
-FROM node:22.23.5-alpine AS build
+FROM node:26.13.1-alpine AS build
 WORKDIR /src
 
 # Dependencies first (cached until package*.json change); lifecycle scripts disabled (supply chain)
