@@ -18,7 +18,7 @@ permissions:
 # A new push on the same branch cancels the run that is now outdated.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }} # never cancel a publication on main
 
 jobs:
   back:
@@ -169,3 +169,14 @@ jobs:
         uses: SonarSource/sonarqube-scan-action@59202af334b4ba7b5db01b701b8e79f8b3bef0f4 # v8.5.0
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+
+  deliver:
+    name: CD
+    needs: [back, front, sonar]
+    # Publish images only for a push to main (never for pull requests or the nightly run)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    uses: ./.github/workflows/cd.yml

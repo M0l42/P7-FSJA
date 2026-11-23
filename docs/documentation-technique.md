@@ -107,7 +107,7 @@ Le détail de chaque étape est donné au §2 ; la conteneurisation et le déplo
 
 ## 2. Étapes de mise en œuvre du pipeline CI/CD
 
-<!-- §2 décrit l'intégration continue (étape 3). À compléter avec cd.yml (étape 5) et release.yml (étape 6). -->
+<!-- §2 décrit l'intégration continue (étape 3) et la livraison continue (étape 5). À compléter avec release.yml (étape 6). -->
 
 ### 2.1 Structure du pipeline
 
@@ -133,6 +133,26 @@ Chaque job écrit un **résumé** sur la page du run GitHub Actions : nombre de 
 
 **Protection de `main`.** Une règle (*ruleset*) interdit le push direct sur `main` : toute modification passe par une pull request. La fusion n'est possible que si les trois jobs sont verts. La *quality gate* est donc réellement bloquante (exemple au §5.1).
 
+**Livraison continue (`cd.yml`).** Après chaque push sur `main`, le job `deliver` de la CI appelle le workflow réutilisable `cd.yml`. Il ne démarre **que si `back`, `front` et `sonar` ont réussi** (`needs`), et travaille donc sur le commit exact validé par la CI.
+
+Une première version déclenchait `cd.yml` avec `workflow_run`, à la fin de la CI. SonarQube l'a signalée (règle `githubactions:S7631`) : récupérer le commit d'un autre workflow peut, dans certaines configurations, exécuter du code venu d'un fork avec accès aux secrets. Le filtre « push sur `main` » rendait ce cas impossible ici, mais la structure en workflow réutilisable supprime le risque à la source. Elle est aussi plus simple à lire, et le workflow de release (étape 6) pourra la réutiliser.
+
+```text
+CI verte sur main ──► build des 2 images ──► test de fumée ──► scan Trivy ──► publication GHCR
+                       (docker compose)      (up --wait,       (rapport SARIF   (sha-<commit>
+                                              curl API/front)   + porte CRITICAL)  + latest)
+```
+
+| Étape | Détail | En cas d'échec |
+|---|---|---|
+| Build | `docker compose build`, mêmes Dockerfiles qu'en local, images taguées `sha-<commit>` | Arrêt, rien n'est publié |
+| Test de fumée | `docker compose up -d --wait` attend que les healthchecks soient verts, puis `curl` sur `/persons` et sur le front | Logs des conteneurs affichés, rien n'est publié |
+| Rapport Trivy | Toutes les sévérités, envoyées dans l'onglet *Security* de GitHub (format SARIF) | — (rapport seulement) |
+| Porte Trivy | Échec si une vulnérabilité CRITIQUE avec correctif existe dans une image | Rien n'est publié |
+| Publication | `docker login` avec le `GITHUB_TOKEN` du job, `docker push` des tags `sha-<commit>` et `latest` | — |
+
+La publication utilise directement la CLI `docker` plutôt que des actions tierces (`docker/login-action`, `docker/build-push-action`). C'est une dépendance de moins à faire confiance, et ce sont les mêmes commandes qu'en local. Le run nightly et les pull requests ne publient jamais d'image.
+
 **Choix des actions GitHub.** Uniquement des actions maintenues et documentées :
 
 | Action | Rôle | Pourquoi |
@@ -140,6 +160,10 @@ Chaque job écrit un **résumé** sur la page du run GitHub Actions : nombre de 
 | `actions/checkout`, `actions/setup-java`, `actions/setup-node` | Récupérer le code, installer Java 17 (Temurin) et Node 22 | Actions officielles GitHub ; cache Gradle et npm intégré |
 | `actions/upload-artifact`, `actions/download-artifact` | Transmettre les rapports entre jobs, publier les rapports HTML | Actions officielles GitHub |
 | `SonarSource/sonarqube-scan-action` | Lancer l'analyse SonarQube Cloud | Action officielle de l'éditeur ; épinglée par SHA de commit (§5) |
+| `aquasecurity/trivy-action` | Scanner les images Docker | Action officielle de l'éditeur de Trivy ; épinglée par SHA sur une *release* immuable (voir ci-dessous) |
+| `github/codeql-action/upload-sarif` | Envoyer les rapports Trivy dans l'onglet *Security* | Action officielle de GitHub ; épinglée par SHA |
+
+**Pourquoi épingler par SHA : un cas réel.** En mars 2026, les tags de `aquasecurity/trivy-action` ont été détournés : 76 tags sur 77 pointaient vers un code qui volait les secrets des pipelines (avis de sécurité publié par Aqua Security). Les workflows qui référençaient l'action par un tag comme `@v0.34` ont exécuté ce code. Ceux qui l'épinglaient par SHA de commit n'étaient pas touchés. Ce projet épingle donc `trivy-action` sur le SHA de la version 0.36.0, publiée comme *release* immuable après l'incident, et fixe explicitement la version de Trivy utilisée (`v0.70.0`).
 
 Les commandes de build et de test restent celles du projet (`./gradlew`, `npm`), appelées directement plutôt que via des actions tierces : la CI exécute exactement ce qu'un développeur lance en local.
 
@@ -290,7 +314,7 @@ Orion n'ayant pas d'environnement de production accessible dans le cadre de ce p
 
 | Déclencheur | Workflow | Tags publiés | Usage |
 |---|---|---|---|
-| Push sur `main` (après fusion) | `cd.yml` | `sha-<commit>` et `latest` | Dernière version validée ; le tag par commit permet de retrouver exactement le code d'une image |
+| Push sur `main` (après fusion), une fois la CI verte | `cd.yml` | `sha-<commit>` et `latest` | Dernière version validée ; le tag par commit permet de retrouver exactement le code d'une image |
 | Tag Git `vX.Y.Z` | `release.yml` | `X.Y.Z` | Version livrée, immuable, utilisée en production |
 
 Avant toute publication, les images passent par le scan Trivy et le test de fumée (§4, §5) ; un échec bloque la publication. L'authentification à GHCR utilise le `GITHUB_TOKEN` du job : aucun secret supplémentaire n'est nécessaire.
@@ -450,7 +474,7 @@ L'application manipule des **données personnelles** (noms, e-mails, organisatio
 | Secret exposé dans le code ou les logs | Secrets GitHub masqués dans les logs, *secret scanning* + *push protection*, un seul secret stocké |
 | Jeton aux droits trop larges | `GITHUB_TOKEN` éphémère, permissions minimales par workflow |
 | Action GitHub compromise (chaîne d'approvisionnement) | Actions officielles ou d'éditeurs reconnus, actions tierces épinglées par SHA, mises à jour suivies par Dependabot |
-| Image publiée avec une faille critique | Scan Trivy bloquant avant publication |
+| Image publiée avec une faille critique ou qui ne démarre pas | Scan Trivy bloquant et test de fumée avant publication, publication seulement après une CI verte |
 | Dépendance devenue vulnérable sans modification du code | Exécution nightly, alertes Dependabot |
 | Image de base non maintenue ou non figée | Images officielles en version figée, mises à jour proposées par Dependabot |
 | Conteneur compromis avec les droits `root` | Utilisateur non privilégié dans les deux images |
