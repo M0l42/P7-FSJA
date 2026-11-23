@@ -3,7 +3,7 @@
 # Containerization plan: docs/documentation-technique.md, section 3.1.
 
 # ---- Build stage ----
-FROM eclipse-temurin:17.0.21.1_2-jdk-alpine AS build
+FROM eclipse-temurin:24.0.2_12-jdk-alpine AS build
 WORKDIR /src
 
 # Gradle wrapper and build files first: the dependency layer stays cached until they change
@@ -16,7 +16,7 @@ COPY src ./src
 RUN ./gradlew bootJar --no-daemon
 
 # ---- Runtime stage ----
-FROM eclipse-temurin:17.0.21.1_2-jre-alpine
+FROM eclipse-temurin:24.0.2_12-jre-alpine
 
 # Unprivileged user: the application never runs as root
 RUN addgroup -S app && adduser -S -G app app
