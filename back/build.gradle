@@ -1,7 +1,7 @@
 plugins {
 	id 'java'
 	id 'jacoco'
-	id 'org.springframework.boot' version '3.5.16'
+	id 'org.springframework.boot' version '4.2.0'
 	id 'io.spring.dependency-management' version '1.1.7'
 	id 'com.adarshr.test-logger' version '4.0.0'
 }
@@ -17,9 +17,6 @@ repositories {
 	mavenCentral()
 }
 
-// Security (SEC01): Spring Boot 3.5.16 ships Tomcat 10.1.55, affected by critical CVEs fixed in 10.1.58+.
-// Remove this override once Spring Boot is upgraded (update plan, section 8).
-ext['tomcat.version'] = '10.1.62'
 
 // Lock resolved dependency versions in gradle.lockfile: reproducible builds, no silent version change.
 // Update with: ./gradlew dependencies --write-locks
@@ -33,6 +30,9 @@ dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-data-rest'
 	implementation 'ro.polak:spring-boot-data-fixtures:0.2.0'
 	testImplementation 'org.springframework.boot:spring-boot-starter-test'
+	// Spring Boot 4: test slices live in their own modules
+	testImplementation 'org.springframework.boot:spring-boot-starter-data-jpa-test'
+	testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
 	runtimeOnly 'org.hsqldb:hsqldb'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }

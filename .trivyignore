@@ -1,14 +1,6 @@
-# Vulnerabilities formally accepted for the Trivy gate (cd.yml). Each entry needs a reason and an expiry date.
-# Security plan: docs/documentation-technique.md, sections 5.2 and 5.3 (decision SEC01).
-
-# CVE-2026-47884 (CRITICAL), spring-webmvc 6.2.19: path limitation flaw in XsltView.
-# - MicroCRM does not use XsltView (the API only serves JSON through Spring Data REST).
-# - No free fix in Spring Framework 6.x: only 7.0.9+, i.e. Spring Boot 4 (planned major upgrade, section 8).
-# - Accepted until the Spring Boot 4 upgrade, at the latest 2027-01-31; the gate blocks again after that date.
-CVE-2026-47884 exp:2027-01-31
-
-# CVE-2026-47890 (CRITICAL), spring-webmvc 6.2.19: Server-Sent Events stream corruption when rendering view fragments.
-# - MicroCRM uses no Server-Sent Events and no view fragments (pure JSON through Spring Data REST; checked in back/src).
-# - No free fix in Spring Framework 6.x: only 7.0.9+, i.e. Spring Boot 4 (planned major upgrade, section 8).
-# - Accepted on the same terms as above, at the latest until 2027-01-31.
-CVE-2026-47890 exp:2027-01-31
+# Vulnerabilities formally accepted for the Trivy gate (cd.yml). Each entry needs a reason and an expiry date,
+# for example:   CVE-YYYY-NNNNN exp:YYYY-MM-DD
+# Security plan: docs/documentation-technique.md, sections 5.2 and 5.3.
+#
+# History: CVE-2026-47884 and CVE-2026-47890 (spring-webmvc 6.2) were accepted until 2027-01-31 (decision SEC01),
+# then removed when Spring Boot 4.2 (Spring Framework 7.1) fixed them (SEC02). No accepted vulnerability today.
