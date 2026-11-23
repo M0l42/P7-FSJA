@@ -11,6 +11,17 @@ updates:
     groups:
       npm-minor-and-patch: # one PR for all non-breaking updates; major versions get their own PR
         update-types: [minor, patch]
+    ignore:
+      # Angular is upgraded as a whole with `ng update` (update plan, section 8), never package by package
+      - dependency-name: "@angular/*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@angular-devkit/*"
+        update-types: ["version-update:semver-major"]
+      # Versions tied to the Angular version: zone.js (0.x, so a "minor" bump is breaking) and TypeScript
+      - dependency-name: "zone.js"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
     commit-message:
       prefix: "build(deps)"
 
