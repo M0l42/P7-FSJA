@@ -22,6 +22,13 @@ updates:
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
       - dependency-name: "typescript"
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      # Test tooling tied to the Angular version (Karma/Jasmine): majors come with the Angular upgrade
+      - dependency-name: "jasmine-core"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/jasmine"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "karma*"
+        update-types: ["version-update:semver-major"]
     commit-message:
       prefix: "build(deps)"
 
