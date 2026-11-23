@@ -49,7 +49,7 @@ Aujourd'hui, la compilation, les tests et le déploiement sont faits à la main.
 | Spring Boot | 3.2.5 | Framework de l'API REST (Spring Data REST, JPA) |
 | HSQLDB | gérée par Spring Boot | Base de données en mémoire |
 | Gradle (wrapper) | 8.7 | Build, tests et packaging du back-end |
-| Node.js | 20 LTS (cible) | Environnement de build du front-end |
+| Node.js | 22 LTS | Environnement de build du front-end (CI et image Docker) |
 | Angular / Angular CLI | 17.3.8 / 17.3.7 | Framework et outillage du front-end |
 | TypeScript | 5.4 | Langage du front-end |
 | Karma / Jasmine | 6.4 / 5.1 | Tests unitaires du front-end (Chrome headless) |
@@ -80,7 +80,7 @@ Points relevés, traités dans la suite du projet :
 1. **`back/gradlew` n'était pas exécutable dans Git** (mode `100644`) : `./gradlew` et le build Docker échouaient avec « Permission denied ». Le même échec se serait produit sur les runners GitHub Actions. Corrigé par `git update-index --chmod=+x back/gradlew`.
 2. **Les deux conteneurs tournent en `root`** : les nouveaux Dockerfiles utiliseront un utilisateur non privilégié (§3.1, §5).
 3. **Versions Java incohérentes** : compilation en Java 17, mais exécution sur un JRE 21 dans l'image existante.
-4. **Node 24 n'est pas supporté par Angular 17** : la CI et le Dockerfile utiliseront Node 20 LTS. La montée de version d'Angular relève du plan de mise à jour (§8).
+4. **Version de Node** : Angular 17 ne supporte officiellement que Node 18 et 20, tous deux en fin de vie (Node 20 depuis le 30/04/2026). La CI et le Dockerfile utilisent **Node 22 LTS**, maintenu jusqu'en avril 2027 : c'est une version au-dessus de la liste officielle d'Angular 17, mais la CI vérifie à chaque exécution que le build et les tests fonctionnent. La montée de version d'Angular, qui rétablit un support officiel, relève du plan de mise à jour (§8).
 5. **Dépendances npm vulnérables et couverture de tests faible** : à suivre dans SonarQube (§5.1) et dans le plan de remédiation (§5.3).
 6. **Dockerfile racine unique à cinq cibles** : base `alpine:3.19` en fin de vie, `FROM node` sans version, `EXPOSE 4200` sur le back-end alors que l'API écoute sur 8080. Il sera remplacé par un Dockerfile par composant (§3.1).
 
@@ -117,7 +117,7 @@ L'intégration continue est définie dans `.github/workflows/ci.yml`. Elle compo
             ┌──────────────────────────┐
             │ back  (Gradle, Java 17)  │──┐
 push / PR ──┤                          │  ├──► sonar (SonarQube Cloud, quality gate)
-nightly     │ front (Node 20, Angular) │──┘
+nightly     │ front (Node 22, Angular) │──┘
             └──────────────────────────┘
 ```
 
@@ -137,7 +137,7 @@ Chaque job écrit un **résumé** sur la page du run GitHub Actions : nombre de 
 
 | Action | Rôle | Pourquoi |
 |---|---|---|
-| `actions/checkout`, `actions/setup-java`, `actions/setup-node` | Récupérer le code, installer Java 17 (Temurin) et Node 20 | Actions officielles GitHub ; cache Gradle et npm intégré |
+| `actions/checkout`, `actions/setup-java`, `actions/setup-node` | Récupérer le code, installer Java 17 (Temurin) et Node 22 | Actions officielles GitHub ; cache Gradle et npm intégré |
 | `actions/upload-artifact`, `actions/download-artifact` | Transmettre les rapports entre jobs, publier les rapports HTML | Actions officielles GitHub |
 | `SonarSource/sonarqube-scan-action` | Lancer l'analyse SonarQube Cloud | Action officielle de l'éditeur ; épinglée par SHA de commit (§5) |
 
@@ -170,7 +170,7 @@ Les commandes de build et de test restent celles du projet (`./gradlew`, `npm`),
 - manuellement, depuis l'onglet *Actions* → *CI* → *Run workflow* (déclencheur `workflow_dispatch`) ;
 - pour un run précis, avec *Re-run jobs* (tous les jobs ou seulement ceux en échec).
 
-**Reproduire en local.** Les commandes du §2.2 sont celles de la CI, avec les mêmes versions : Java 17, Node 20, dépendances figées par `package-lock.json` et `gradle.lockfile`.
+**Reproduire en local.** Les commandes du §2.2 sont celles de la CI, avec les mêmes versions : Java 17, Node 22, dépendances figées par `package-lock.json` et `gradle.lockfile`.
 
 **Gestion des secrets :**
 - **Un seul secret** : `SONAR_TOKEN`, stocké dans les *GitHub Secrets* du dépôt et dans les *Dependabot secrets* (les pull requests de Dependabot ne reçoivent pas les secrets ordinaires).
@@ -217,14 +217,14 @@ Les outils de build, le code source et les caches ne sont pas dans l'image final
 
 | | Back-end (`back/Dockerfile`) | Front-end (`front/Dockerfile`) |
 |---|---|---|
-| Étape build | `eclipse-temurin:17-jdk-alpine` + wrapper Gradle → `bootJar` | `node:20-alpine` → `npm ci` + `ng build` |
+| Étape build | `eclipse-temurin:17-jdk-alpine` + wrapper Gradle → `bootJar` | `node:22-alpine` → `npm ci --ignore-scripts` + `ng build` |
 | Étape exécution | `eclipse-temurin:17-jre-alpine` | image officielle `caddy` (Alpine) |
 | Port interne | 8080 | 8080 |
 | Utilisateur | non privilégié | non privilégié |
 
 **Justification des images.**
 - **Back-end** : `eclipse-temurin:17-jre-alpine` est l'image officielle de la distribution Java Temurin. Elle reprend la version de compilation (17), ce qui supprime l'écart avec Java 21, et reste légère. Une image *distroless* réduirait encore la surface d'attaque, mais sans shell le diagnostic devient difficile : c'est une évolution à long terme (§5.3).
-- **Node 20 LTS** : Angular 17 ne supporte pas Node 24.
+- **Node 22 LTS** : seule l'étape de build utilise Node ; l'image finale n'en contient pas (voir §1 pour l'écart avec les versions supportées par Angular 17).
 - **Front-end, Caddy conservé** : Caddy est le serveur déjà utilisé. En production, son atout est le **HTTPS automatique** (certificat Let's Encrypt obtenu et renouvelé seul pour le nom de domaine). Passer à nginx obligerait à gérer les certificats soi-même et à migrer une configuration en production. Ce serait aussi changer deux choses à la fois pendant l'arrivée de la CI/CD, pour un gain faible. Caddy est donc conservé, mais modernisé :
   - **Image officielle** `caddy`, au lieu de `apk add caddy` sur une Alpine en fin de vie.
   - **Utilisateur non privilégié**, qui écoute sur le port 8080 dans le conteneur.
@@ -241,6 +241,18 @@ Les outils de build, le code source et les caches ne sont pas dans l'image final
 - Compression gzip côté Caddy.
 - Aucun secret dans les images.
 
+**Vérification après mise en place**
+
+| Contrôle | Ancien Dockerfile racine | Nouveaux Dockerfiles |
+|---|---|---|
+| Utilisateur dans le conteneur | `root` | `app` (back), `web` (front) |
+| Version Java à l'exécution | 21 (compilé en 17) | 17 |
+| Taille de l'image back | 373 Mo | 356 Mo |
+| Taille de l'image front | 78 Mo | 92 Mo |
+| Front servi en | HTTPS auto-signé (avertissement navigateur) | HTTP local, HTTPS automatique en production |
+
+L'image du front est un peu plus lourde : l'image officielle `caddy` remplace un paquet `apk`. Ce léger surcoût est accepté en échange d'une image maintenue par l'éditeur et figée en version.
+
 ### 3.2 docker-compose.yml
 
 `docker-compose.yml` décrit l'application complète :
@@ -254,7 +266,7 @@ Il n'y a pas de service de base de données : l'API utilise HSQLDB **en mémoire
 
 Le port 8080 de l'API est publié sur l'hôte, car le front appelle l'API **depuis le navigateur**, à l'adresse `http://localhost:8080` définie dans `front/src/app/config.ts`. L'origine autorisée par CORS est donc celle du front, `http://localhost:4200`.
 
-Chaque service déclare à la fois `build:` et `image:`. Le même fichier sert ainsi à **construire** l'application en local et à **déployer** une version publiée (§3.3).
+Chaque service a un **healthcheck** : Docker interroge le service toutes les 10 secondes et le marque `healthy` ou `unhealthy` (`make ps`). Chaque service déclare à la fois `build:` et `image:`. Le même fichier sert ainsi à **construire** l'application en local et à **déployer** une version publiée (§3.3).
 
 **Lancer l'application en local**
 
@@ -369,7 +381,7 @@ La *quality gate* (§4.3) bloque une pull request qui introduit un bug, une vuln
 
 - **Dépendances** : `npm audit` s'exécute dans la CI et affiche son rapport sans bloquer. L'état initial (90 vulnérabilités, dont 5 critiques) ferait échouer chaque exécution jusqu'à la montée de version d'Angular et masquerait les autres signaux. **Dependabot** surveille npm, Gradle, les images Docker et les actions GitHub : il ouvre des pull requests de mise à jour et des alertes de sécurité.
 - **Images Docker** : **Trivy** scanne chaque image avant sa publication, paquets système et bibliothèques Java du JAR compris. La publication est **bloquée** si une vulnérabilité CRITIQUE disposant d'un correctif est trouvée. Toutes les sévérités sont envoyées dans l'onglet *Security* de GitHub (format SARIF).
-- **Images de base** : uniquement des images officielles, en version figée (`eclipse-temurin:17-jre-alpine`, `caddy`, `node:20-alpine`). Les conteneurs s'exécutent avec un utilisateur non privilégié.
+- **Images de base** : uniquement des images officielles, en version figée (`eclipse-temurin:17-jre-alpine`, `caddy`, `node:22-alpine`). Les conteneurs s'exécutent avec un utilisateur non privilégié.
 - **Secrets** :
   - un seul secret stocké, `SONAR_TOKEN`, dans les *GitHub Secrets* ;
   - la publication sur GHCR utilise le `GITHUB_TOKEN` fourni automatiquement à chaque job, qui expire avec lui ;

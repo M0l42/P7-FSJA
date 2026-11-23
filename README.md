@@ -106,50 +106,45 @@ cd back
 ./gradlew test
 ```
 
-### Images Docker
+### Docker
 
-#### Client
+Chaque composant a son propre `Dockerfile` (`back/Dockerfile`, `front/Dockerfile`), et `docker-compose.yml` lance l'application complète.
 
-##### Construire l'image
+**Dépendances :** Docker et Docker Compose v2 (`docker compose`).
 
-```shell
-docker build --target front -t orion-microcrm-front:latest .
-```
-
-##### Exécuter l'image
+#### Lancer l'application
 
 ```shell
-docker run -it --rm -p 80:80 -p 443:443 orion-microcrm-front:latest
+make up      # équivaut à : docker compose up -d --build
 ```
 
-L'application sera disponible sur https://localhost.
+- Application : http://localhost:4200
+- API : http://localhost:8080
 
-#### Serveur
+#### Commandes utiles
 
-##### Construire l'image
+| Commande | Rôle |
+|---|---|
+| `make help` | Liste des commandes |
+| `make up` / `make down` | Construire et démarrer / arrêter l'application |
+| `make logs` / `make ps` | Logs des deux services / état et santé des conteneurs |
+| `make smoke` | Vérifier que l'API et le front répondent |
+| `make test` | Tous les tests (back + front), hors Docker |
+| `make build` | Construire les deux images |
+
+#### Configuration
+
+| Variable | Service | Défaut | Rôle |
+|---|---|---|---|
+| `APP_CORS_ORIGINS` | back | `http://localhost:4200` | Origines autorisées à appeler l'API depuis un navigateur (séparées par des virgules) |
+| `SITE_ADDRESS` | front | `:8080` | Adresse servie par Caddy. Un nom de domaine active le HTTPS automatique |
+| `TAG` | les deux | `latest` | Version des images publiées à utiliser (`docker compose pull`) |
+
+#### Déployer une version publiée
+
+Les images sont publiées sur GitHub Container Registry (`ghcr.io/m0l42/microcrm-back`, `ghcr.io/m0l42/microcrm-front`) :
 
 ```shell
-docker build --target back -t orion-microcrm-back:latest .
+TAG=1.0.0 docker compose pull
+TAG=1.0.0 docker compose up -d
 ```
-
-##### Exécuter l'image
-
-```shell
-docker run -it --rm -p 8080:8080 orion-microcrm-back:latest
-```
-
-L'API sera disponible sur http://localhost:8080.
-
-#### Tout en un
-
-```shell
-docker build --target standalone -t orion-microcrm-standalone:latest .
-```
-
-##### Exécuter l'image
-
-```shell
-docker run -it --rm -p 8080:8080 -p 80:80 -p 443:443 orion-microcrm-standalone:latest
-```
-
-L'application sera disponible sur https://localhost et l'API sur http://localhost:8080.
