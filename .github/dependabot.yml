@@ -48,6 +48,12 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    ignore:
+      # Java must match the compile target (17) and Node must stay compatible with Angular: majors are planned work
+      - dependency-name: "eclipse-temurin"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "node"
+        update-types: ["version-update:semver-major"]
     commit-message:
       prefix: "build(docker)"
 
