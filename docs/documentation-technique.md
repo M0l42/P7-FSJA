@@ -107,7 +107,7 @@ Le détail de chaque étape est donné au §2 ; la conteneurisation et le déplo
 
 ## 2. Étapes de mise en œuvre du pipeline CI/CD
 
-<!-- §2 décrit l'intégration continue (étape 3) et la livraison continue (étape 5). À compléter avec release.yml (étape 6). -->
+<!-- §2 décrit l'intégration continue (étape 3), la livraison continue (étape 5) et la release (étape 6). -->
 
 ### 2.1 Structure du pipeline
 
@@ -152,6 +152,14 @@ CI verte sur main ──► build des 2 images ──► test de fumée ──�
 | Publication | `docker login` avec le `GITHUB_TOKEN` du job, `docker push` des tags `sha-<commit>` et `latest` | — |
 
 La publication utilise directement la CLI `docker` plutôt que des actions tierces (`docker/login-action`, `docker/build-push-action`). C'est une dépendance de moins à faire confiance, et ce sont les mêmes commandes qu'en local. Le run nightly et les pull requests ne publient jamais d'image.
+
+**Release (`release.yml`).** Une personne pousse un tag `vX.Y.Z` : c'est l'étape de validation volontaire. Le workflow :
+1. vérifie que le tag a la forme `vX.Y.Z` et que le commit tagué est **sur `main`**, donc déjà validé par la CI et la *quality gate* ;
+2. relance les tests et construit le back-end et le front-end, en parallèle ;
+3. appelle `cd.yml` avec la version : mêmes build, test de fumée et porte Trivy, mais les images sont publiées avec le tag `X.Y.Z` (et non `latest`) ;
+4. seulement si tout a réussi, crée la *GitHub Release* avec le JAR (`microcrm-back-X.Y.Z.jar`), l'archive du build Angular (`microcrm-front-X.Y.Z.zip`), un fichier d'empreintes `SHA256SUMS.txt` et les commandes de déploiement.
+
+La release est créée avec la CLI `gh` préinstallée sur les runners, sans action tierce.
 
 **Choix des actions GitHub.** Uniquement des actions maintenues et documentées :
 
