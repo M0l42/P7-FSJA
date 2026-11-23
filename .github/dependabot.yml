@@ -44,7 +44,7 @@ updates:
       prefix: "build(deps)"
 
   - package-ecosystem: docker
-    directory: / # moves to /back and /front with the per-component Dockerfiles (step 4)
+    directories: ["/back", "/front"] # one Dockerfile per component
     schedule:
       interval: weekly
       day: monday
