@@ -1,0 +1,146 @@
+# Continuous delivery: build the Docker images, smoke-test them, scan them with Trivy,
+# then publish them to GitHub Container Registry (GHCR).
+# Runs only after the CI workflow succeeded on a push to main.
+# Deployment plan: docs/documentation-technique.md, sections 3.3, 4 and 5.
+name: CD
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch: # manual re-run from the Actions tab (publishes the current main)
+
+permissions:
+  contents: read
+
+# Never publish two versions at the same time; never cancel a publication halfway.
+concurrency:
+  group: cd-main
+  cancel-in-progress: false
+
+env:
+  IMAGE_PREFIX: ghcr.io/m0l42/microcrm
+
+jobs:
+  publish:
+    name: Build, test, scan and publish images
+    runs-on: ubuntu-latest
+    # Only after a successful CI run triggered by a push (not by the nightly run or a pull request)
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    permissions:
+      contents: read
+      packages: write # push to GHCR with the job's GITHUB_TOKEN
+      security-events: write # upload Trivy reports to the Security tab
+    env:
+      COMMIT_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.COMMIT_SHA }} # exactly the commit CI validated
+
+      - name: Set the image tag (sha-<commit>)
+        run: echo "TAG=sha-${COMMIT_SHA::7}" >> "$GITHUB_ENV"
+
+      - name: Build images
+        run: docker compose build
+
+      # ---- Smoke test: the built images start and answer ----
+      - name: Start the application
+        run: docker compose up -d --wait --wait-timeout 180
+
+      - name: Smoke test
+        run: |
+          curl -fsS -o /dev/null http://localhost:8080/persons && echo "API   OK"
+          curl -fsS -o /dev/null http://localhost:4200/ && echo "front OK"
+
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Stop the application
+        if: always()
+        run: docker compose down
+
+      # ---- Security scan (Trivy). Third-party action pinned by commit SHA:
+      # its tags were hijacked in March 2026 (GHSA advisory), v0.36.0 is an immutable release. ----
+      - name: Trivy report, back (all severities, for the Security tab)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.70.0
+          image-ref: ${{ env.IMAGE_PREFIX }}-back:${{ env.TAG }}
+          format: sarif
+          output: trivy-back.sarif
+
+      - name: Trivy report, front (all severities, for the Security tab)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.70.0
+          image-ref: ${{ env.IMAGE_PREFIX }}-front:${{ env.TAG }}
+          format: sarif
+          output: trivy-front.sarif
+
+      - name: Upload Trivy report, back
+        uses: github/codeql-action/upload-sarif@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
+        with:
+          sarif_file: trivy-back.sarif
+          category: trivy-back
+
+      - name: Upload Trivy report, front
+        uses: github/codeql-action/upload-sarif@1bd86f2fdb4b86187fa4059f16f31a3202acc9ea # v4.39.4
+        with:
+          sarif_file: trivy-front.sarif
+          category: trivy-front
+
+      - name: Trivy gate, back (blocks on fixable CRITICAL vulnerabilities)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.70.0
+          image-ref: ${{ env.IMAGE_PREFIX }}-back:${{ env.TAG }}
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Trivy gate, front (blocks on fixable CRITICAL vulnerabilities)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: v0.70.0
+          image-ref: ${{ env.IMAGE_PREFIX }}-front:${{ env.TAG }}
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      # ---- Publish: only reached if the smoke test and the Trivy gate passed ----
+      - name: Log in to GHCR
+        env:
+          REGISTRY_USER: ${{ github.actor }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$REGISTRY_TOKEN" | docker login ghcr.io -u "$REGISTRY_USER" --password-stdin
+
+      - name: Push images (sha-<commit> and latest)
+        run: |
+          for component in back front; do
+            image="$IMAGE_PREFIX-$component"
+            docker push "$image:$TAG"
+            docker tag "$image:$TAG" "$image:latest"
+            docker push "$image:latest"
+          done
+
+      - name: Write job summary
+        run: |
+          {
+            echo "### Published images"
+            echo "| Image | Tags | Digest |"
+            echo "|---|---|---|"
+            for component in back front; do
+              image="$IMAGE_PREFIX-$component"
+              digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$image:$TAG" | cut -d@ -f2)
+              echo "| \`$image\` | \`$TAG\`, \`latest\` | \`$digest\` |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Log out of GHCR
+        if: always()
+        run: docker logout ghcr.io
