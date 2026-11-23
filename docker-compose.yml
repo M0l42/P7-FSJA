@@ -1,0 +1,37 @@
+# MicroCRM: API (back) + web front end (front).
+# Local:      make up              (builds the images from ./back and ./front)
+# Deployment: TAG=1.0.0 docker compose pull && TAG=1.0.0 docker compose up -d   (published GHCR images)
+# Containerization and deployment plan: docs/documentation-technique.md, section 3.
+
+services:
+  back:
+    build: ./back
+    image: ghcr.io/m0l42/microcrm-back:${TAG:-latest}
+    ports:
+      # Published on the host: the browser calls the API at http://localhost:8080 (front/src/app/config.ts)
+      - "8080:8080"
+    environment:
+      # Only the front end may call the API from a browser (CORS)
+      APP_CORS_ORIGINS: http://localhost:4200
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
+  front:
+    build: ./front
+    image: ghcr.io/m0l42/microcrm-front:${TAG:-latest}
+    ports:
+      - "4200:8080"
+    environment:
+      # Plain HTTP locally; a domain name here enables automatic HTTPS in production
+      SITE_ADDRESS: ":8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
