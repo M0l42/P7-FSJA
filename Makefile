@@ -1,10 +1,10 @@
 # Shortcuts for local work. CI calls ./gradlew and npm directly, so each step stays visible in the Actions logs.
 # Commands reference: docs/documentation-technique.md, section 2.2.
 
-.PHONY: help build test test-back test-front up down logs ps smoke backup restore
+.PHONY: help build test test-back test-front up down logs ps smoke backup restore elk-up elk-down elk-dashboards traffic
 
 help: ## List the available commands
-	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  make %-11s %s\n", $$1, $$2}'
+	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  make %-15s %s\n", $$1, $$2}'
 
 build: ## Build both Docker images
 	docker compose build
@@ -49,3 +49,18 @@ restore: ## Restore a backup into an empty database: make restore FILE=backups/m
 	docker compose run --rm --no-deps --user root -v "$(CURDIR)/backups:/backups" --entrypoint sh back \
 		-c '[ -z "$$(ls -A /data)" ] || { echo "Database not empty: see section 7.3"; exit 1; }; tar xzf /backups/$(notdir $(FILE)) -C /data && chown -R app:app /data'
 	docker compose up -d back
+
+# ---- Local monitoring (ELK). Not part of CI/CD. Needs .env (copy .env.example) and ~3 GB of free RAM.
+elk-up: ## Start the ELK stack (Kibana on http://localhost:5601, user elastic)
+	@test -f .env || { echo "Missing .env: cp .env.example .env, then set the passwords"; exit 1; }
+	docker compose -f docker-compose-elk.yml up -d --wait
+
+elk-down: ## Stop the ELK stack (the collected logs are kept on the es-data volume)
+	docker compose -f docker-compose-elk.yml down
+
+elk-dashboards: ## Create the Kibana data view and the MicroCRM dashboard
+	@test -f .env || { echo "Missing .env"; exit 1; }
+	./elk/kibana/import-dashboards.sh
+
+traffic: ## Simulate user traffic for the dashboards: make traffic [DURATION=300]
+	./scripts/traffic.sh $(or $(DURATION),300)

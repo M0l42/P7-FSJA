@@ -1,0 +1,27 @@
+# Filebeat: reads the log files Docker writes for each container and sends the MicroCRM ones to Logstash.
+filebeat.inputs:
+  - type: filestream
+    id: docker-containers
+    paths:
+      - /var/lib/docker/containers/*/*.log
+    parsers:
+      - container: ~ # unwraps Docker's json-file format: the line written by the app becomes "message"
+
+processors:
+  # Adds container name, image and Compose labels (service, project) from the Docker API (read-only socket)
+  - add_docker_metadata: ~
+  # Keep only the two MicroCRM services; drop everything else (ELK itself, other containers)
+  - drop_event:
+      when:
+        not:
+          regexp:
+            container.labels.com_docker_compose_service: "^(back|front)$"
+
+output.logstash:
+  hosts: ["logstash:5044"]
+
+# No Filebeat self-monitoring, no Kibana setup from Filebeat: dashboards are provisioned separately
+monitoring.enabled: false
+setup.dashboards.enabled: false
+setup.template.enabled: false
+logging.level: warning

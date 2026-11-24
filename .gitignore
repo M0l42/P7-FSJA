@@ -3,3 +3,6 @@ OpenClassrooms/*
 CLAUDE.md
 docs/designs/*
 backups/
+
+# Local secrets (ELK passwords): never committed, see .env.example
+.env
