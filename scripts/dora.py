@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """DORA metrics and pipeline KPIs of MicroCRM, computed from the GitHub Actions history (read-only).
 
-Usage:  scripts/dora.py [--repo M0l42/P7-FSJA] [--json out.json]
+Usage:  scripts/dora.py [--repo M0l42/P7-FSJA]
 Needs:  the GitHub CLI (gh), logged in. Only reads public data (workflow runs, jobs, pull requests).
 
 Definitions (documented in docs/documentation-technique.md, section 6):
@@ -16,6 +16,7 @@ Definitions (documented in docs/documentation-technique.md, section 6):
 """
 import argparse
 import json
+import re
 import statistics
 import subprocess
 from datetime import datetime
@@ -58,8 +59,10 @@ def summary(values):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--repo", default="M0l42/P7-FSJA")
-    ap.add_argument("--json", help="also write the raw results to this file")
     args = ap.parse_args()
+    # The repository becomes part of the gh command: accept only the "owner/name" form (no option injection)
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", args.repo):
+        ap.error("--repo must be of the form owner/name")
     repo = args.repo
 
     runs = [r for page in gh(f"repos/{repo}/actions/workflows/ci.yml/runs?per_page=100") for r in page["workflow_runs"]]
@@ -141,12 +144,6 @@ def main():
     print(f"| K1 CI duration per PR | {m(ci_minutes)} | successful pull request runs |")
     print(f"| K1 job durations | back {m(job_minutes['back'])}; front {m(job_minutes['front'])}; sonar {m(job_minutes['sonar'])} | jobs of pull request runs |")
     print(f"| K2 quality gate pass rate | {gate['success']}/{gate_total} = {gate['success'] / gate_total * 100 if gate_total else 0:.0f} % | SonarQube job of pull request runs |")
-
-    if args.json:
-        with open(args.json, "w") as fh:
-            json.dump({"deployments": len(deployments), "days": days, "lead_time_h": lead, "merge_to_deploy_h": merge_to_deploy,
-                       "main_runs": len(main_runs), "failed_main_runs": len(failed), "restore_h": restore,
-                       "ci_minutes": ci_minutes, "job_minutes": job_minutes, "quality_gate": gate, "releases": releases}, fh, indent=1)
 
 
 if __name__ == "__main__":
