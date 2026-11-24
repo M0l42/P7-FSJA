@@ -1,6 +1,11 @@
 # Site address from the SITE_ADDRESS environment variable (default :8080, plain HTTP).
 # With a domain name instead (e.g. crm.orion.example), Caddy obtains and renews a Let's Encrypt certificate.
 {$SITE_ADDRESS::8080} {
+	# Access log: one JSON line per request on stdout, collected by Filebeat for ELK (docker-compose-elk.yml)
+	log {
+		output stdout
+		format json
+	}
 	root * /srv
 	encode gzip
 	# Angular routing: unknown paths are served by index.html

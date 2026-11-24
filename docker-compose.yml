@@ -13,6 +13,8 @@ services:
     environment:
       # Only the front end may call the API from a browser (CORS)
       APP_CORS_ORIGINS: http://localhost:4200
+      # Structured logs (JSON app logs + HTTP access log) for ELK: back/src/main/resources/application-docker.properties
+      SPRING_PROFILES_ACTIVE: docker
       # Persistent data: HSQLDB stored in files on the microcrm-data volume (not in memory),
       # so data survives restarts and deployments. Backup / restore: make backup, make restore.
       SPRING_DATASOURCE_URL: jdbc:hsqldb:file:/data/microcrm;hsqldb.write_delay=false
