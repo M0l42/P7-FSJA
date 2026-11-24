@@ -1,7 +1,7 @@
 # Shortcuts for local work. CI calls ./gradlew and npm directly, so each step stays visible in the Actions logs.
 # Commands reference: docs/documentation-technique.md, section 2.2.
 
-.PHONY: help build test test-back test-front up down logs ps smoke backup restore elk-up elk-down elk-dashboards traffic
+.PHONY: help build test test-back test-front up down logs ps smoke backup restore elk-up elk-down elk-dashboards traffic dora
 
 help: ## List the available commands
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  make %-15s %s\n", $$1, $$2}'
@@ -64,3 +64,7 @@ elk-dashboards: ## Create the Kibana data view and the MicroCRM dashboard
 
 traffic: ## Simulate user traffic for the dashboards: make traffic [DURATION=300]
 	./scripts/traffic.sh $(or $(DURATION),300)
+
+# ---- Delivery performance (reads the GitHub Actions history; needs the GitHub CLI, gh, logged in)
+dora: ## DORA metrics and pipeline KPIs from the GitHub Actions history
+	./scripts/dora.py
