@@ -46,7 +46,7 @@ La compilation, les tests et le déploiement étaient faits à la main. Ce proce
 | Spring Boot | 4.2.0 (3.2.5 au départ, §5.3) | Framework de l'API REST (Spring Data REST, JPA) |
 | HSQLDB | gérée par Spring Boot | Base de données, stockée sur un volume Docker (§7) |
 | Gradle (wrapper) | 8.14.8 (8.7 au départ) | Build, tests et packaging du back-end |
-| Node.js | 22 LTS | Build du front-end (CI et image Docker) |
+| Node.js | 24 LTS | Build du front-end (CI et image Docker) |
 | Angular | 22.3.0 (17.3.8 au départ, §5.3) | Framework du front-end |
 | TypeScript | 6.0 | Langage du front-end |
 | Karma / Jasmine | 6.4 / 5.1 | Tests unitaires du front-end (Chrome headless) |
@@ -158,7 +158,7 @@ Le `Makefile` regroupe les commandes du quotidien (`make help` les liste). La CI
 
 ### 2.3 Reproductibilité
 
-**Relancer le pipeline :** automatiquement à chaque push, pull request et chaque nuit (03:00 UTC) ; manuellement depuis l'onglet *Actions* → *CI* → *Run workflow* ; ou pour un run précis avec *Re-run jobs*. **En local**, les commandes du §2.2 sont celles de la CI, avec les mêmes versions : Java 17, Node 22, dépendances figées par `package-lock.json` et `gradle.lockfile`. Le lock file npm doit être généré avec la même version de npm que la CI (voir annexe B).
+**Relancer le pipeline :** automatiquement à chaque push, pull request et chaque nuit (03:00 UTC) ; manuellement depuis l'onglet *Actions* → *CI* → *Run workflow* ; ou pour un run précis avec *Re-run jobs*. **En local**, les commandes du §2.2 sont celles de la CI, avec les mêmes versions : Java 17, Node 24, dépendances figées par `package-lock.json` et `gradle.lockfile`. Le lock file npm doit être généré avec la même version de npm que la CI (npm 11, Node 24 ; voir annexe B).
 
 **Gestion des secrets :**
 - **un seul secret** : `SONAR_TOKEN`, dans les *GitHub Secrets* du dépôt et dans les *Dependabot secrets* (les pull requests de Dependabot ne reçoivent pas les secrets ordinaires) ;
@@ -184,7 +184,7 @@ Ce remplacement change la façon de déployer (un conteneur `standalone` devient
 
 | | Back-end | Front-end |
 |---|---|---|
-| Étape build | `eclipse-temurin:17-jdk-alpine` + wrapper Gradle → `bootJar` | `node:22-alpine` → `npm ci --ignore-scripts` + `ng build` |
+| Étape build | `eclipse-temurin:17-jdk-alpine` + wrapper Gradle → `bootJar` | `node:24-alpine` → `npm ci --ignore-scripts` + `ng build` |
 | Étape exécution | `eclipse-temurin:17-jre-alpine` | image officielle `caddy` (Alpine) |
 | Port interne | 8080 | 8080 |
 | Utilisateur | `app`, non privilégié | `web`, non privilégié |
@@ -319,6 +319,8 @@ Ce plan suit un principe simple : **identifier, évaluer, recommander, remonter*
 
 **Couverture.** La première mesure était faussée : les fichiers de test étaient comptés comme du code à couvrir. Après correction de la mesure et ajout des tests CORS, elle passe de 28,4 % à 38,2 %. Elle reste faible sur les services du front.
 
+**Rapports Trivy.** Les images sont aussi analysées par Trivy, dont les résultats sont dans l'onglet *Security* de GitHub (annexe D, figures 7 et 8). La porte ne bloque que les vulnérabilités **critiques corrigeables** : il n'y en a aucune. Les alertes restantes (élevées et moyennes) se trouvent surtout dans le binaire de Caddy, compilé avec des bibliothèques Go dont une version corrigée existe déjà (par exemple `golang.org/x/net` 0.60.0, corrigé en 0.62.0). Aucune version de Caddy les intégrant n'est encore publiée (2.11.9 est la dernière) : Dependabot proposera la nouvelle image dès sa sortie, et la revue mensuelle de l'onglet *Security* (§8.3) assure le suivi.
+
 **Ce que la mise en place a montré :**
 - **le pipeline s'est contrôlé lui-même** : la première analyse a signalé 6 vulnérabilités dans le workflow `ci.yml` (scripts npm à l'installation, `npx` sans version, action tierce référencée par tag), corrigées avant la première fusion ;
 - **la *quality gate* est réellement bloquante** : la pull request de correction CORS a été bloquée à 25 % de couverture du nouveau code (son fichier de test était encore compté), puis acceptée à 100 % après correction de la mesure (annexe D, figure 2) ;
@@ -442,7 +444,7 @@ Procédure testée : création d'une personne, sauvegarde, suppression du volume
 
 **Images Docker.** Les images de base sont figées en version et mises à jour par Dependabot (correctifs uniquement : la version de Java doit rester celle de la compilation, et celle de Node compatible avec Angular). Le run nightly et Trivy détectent une image devenue vulnérable.
 
-**Prochaines échéances connues** : Node 22 (fin de support en avril 2027), Spring Boot 4.2 (décembre 2027), Java 17 (la cible de compilation pourra passer en 21 ou 25), Karma, outil de test historique d'Angular, à remplacer par l'outil recommandé par Angular lors d'une prochaine itération.
+**Prochaines échéances connues** : Node 24 (fin de support en avril 2028), Spring Boot 4.2 (décembre 2027), Java 17 (la cible de compilation pourra passer en 21 ou 25), Karma, outil de test historique d'Angular, à remplacer par l'outil recommandé par Angular lors d'une prochaine itération.
 
 ### 8.2 Mise à jour du pipeline CI/CD
 
@@ -492,7 +494,7 @@ Le pipeline a aussi servi à corriger l'existant : Spring Boot 3.2 → 4.2, Angu
 
 | Action | Rôle | Référence |
 |---|---|---|
-| `actions/checkout`, `actions/setup-java`, `actions/setup-node` | Récupérer le code, installer Java 17 et Node 22 (cache Gradle et npm) | Officielles GitHub, version majeure (`@v7`, `@v6`) |
+| `actions/checkout`, `actions/setup-java`, `actions/setup-node` | Récupérer le code, installer Java 17 et Node 24 (cache Gradle et npm) | Officielles GitHub, version majeure (`@v7`, `@v6`) |
 | `actions/upload-artifact`, `actions/download-artifact` | Transmettre les rapports entre jobs, publier les rapports HTML | Officielles GitHub, version majeure |
 | `SonarSource/sonarqube-scan-action` | Analyse SonarQube Cloud | Éditeur, **épinglée par SHA** (v8.5.0) |
 | `aquasecurity/trivy-action` | Scan des images | Éditeur, **épinglée par SHA** sur une *release* immuable (v0.36.0), version de Trivy fixée |
@@ -519,7 +521,7 @@ Preuve : les réponses de l'API à **16 appels de référence** (lectures, créa
 **SEC03 – Angular 22,** une version majeure à la fois (17 → 18 → 19 → 20 → 21 → 22), avec à chaque étape les migrations officielles (`ng update`), les tests, le build et un commit séparé. Les migrations ont converti les gabarits vers la nouvelle syntaxe de contrôle (`*ngFor` → `@for`, `*ngIf` → `@if`) et remplacé les modules HTTP dépréciés. Puis `npm audit fix` : **0 vulnérabilité npm**. Preuve : 8 tests sur 8 et couverture identique (30,76 % des lignes) ; le **rendu des 4 routes** (texte visible, 13 champs de formulaire, 14 liens) capturé avant puis comparé sur la nouvelle image Docker : **identique** ; aucune erreur dans la console du navigateur.
 
 **Pièges rencontrés.**
-- **Version de npm** : le lock file avait d'abord été généré avec npm 11 (poste local), et npm 10 (CI et Docker) l'a refusé. Il a été régénéré dans l'image `node:22` du pipeline : un outil de build doit être le même en local et en CI.
+- **Version de npm** : le lock file avait d'abord été généré avec npm 11 (poste local), et npm 10 (Node 22, en CI et dans Docker) l'a refusé. Le problème est revenu avec Dependabot, qui écrit lui aussi le lock file avec npm 11 : chacune de ses mises à jour npm échouait. La correction de fond a été de construire le front avec **Node 24 LTS** (npm 11, supporté jusqu'en avril 2028 et par Angular 22) : la même version de npm est maintenant utilisée sur le poste local, par Dependabot, en CI et dans Docker. Un outil de build doit être le même partout.
 - **Point d'entrée Angular** : la *quality gate* a bloqué une ligne non couverte dans `main.ts`, qui démarre l'application dans le navigateur et ne peut pas être testé unitairement ; il a été exclu de la mesure de couverture, avec la raison documentée.
 - **Limite de débit** : une exécution a échoué parce que Maven Central a limité les requêtes du runner GitHub (HTTP 429), sans lien avec la modification ; la relance a réussi.
 
@@ -562,4 +564,10 @@ L'image du front est un peu plus lourde : l'image officielle `caddy` remplace un
 
 ![Application MicroCRM](images/app-dashboard.png)
 
-<!-- Capture à ajouter (connexion nécessaire) : onglet Security de GitHub avec les rapports Trivy. -->
+**Figure 7 – Onglet *Security* de GitHub : alertes Trivy sur les images publiées.** Chaque vulnérabilité trouvée dans les images est suivie comme une alerte, avec sa sévérité et le composant concerné.
+
+![Alertes Trivy dans l'onglet Security](images/security-trivy-list.png)
+
+**Figure 8 – Détail d'une alerte Trivy** : paquet, version installée, version corrigée et référence CVE, ce qui permet de décider de l'action à mener.
+
+![Détail d'une alerte Trivy](images/security-trivy-alert.png)
