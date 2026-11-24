@@ -106,9 +106,6 @@ public class Person {
 
   @PreRemove
   private void removeFromOrganizations() {
-    if (organizations == null) {
-      return;
-    }
     // Iterate over a copy: removePerson changes the collections involved
     for (Organization org : new ArrayList<>(organizations)) {
       org.removePerson(this);

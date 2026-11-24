@@ -55,6 +55,24 @@ class OrganizationDeletionTest {
         assertEquals(1, otherMembers, "the other organization keeps its member");
     }
 
+    @Test
+    void deletingAPersonRemovesItFromItsOrganizations() throws Exception {
+        long[] ids = tx.execute(status -> {
+            Person grace = person("grace.deletion@example.net");
+            Person linus = person("linus.deletion@example.net");
+            Organization org = organization("Kept Inc.", grace, linus);
+            return new long[] { org.getId(), grace.getId() };
+        });
+        long orgId = ids[0], graceId = ids[1];
+
+        mockMvc.perform(delete("/persons/" + graceId))
+                .andExpect(status().is2xxSuccessful());
+
+        assertTrue(personRepository.findById(graceId).isEmpty(), "the person is deleted");
+        Integer members = tx.execute(status -> organizationRepository.findById(orgId).orElseThrow().getPersons().size());
+        assertEquals(1, members, "the organization still exists, without the deleted person");
+    }
+
     private Person person(String email) {
         Person p = new Person();
         p.setEmail(email);
