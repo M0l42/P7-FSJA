@@ -1,6 +1,7 @@
 package com.openclassroom.devops.orion.microcrm;
 
 import java.util.Date;
+import java.util.ArrayList;
 import java.util.List;
 
 import org.hibernate.annotations.CreationTimestamp;
@@ -104,8 +105,9 @@ public class Person {
   }
 
   @PreRemove
-  private void remoteFromOrganization() {
-    for (Organization org : organizations) {
+  private void removeFromOrganizations() {
+    // Iterate over a copy: removePerson changes the collections involved
+    for (Organization org : new ArrayList<>(organizations)) {
       org.removePerson(this);
     }
   }
