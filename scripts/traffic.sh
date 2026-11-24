@@ -41,7 +41,7 @@ action() {
     new=$(curl -s -m 5 "${JSON[@]}" -X POST "$API/persons" \
       -d "{\"firstName\":\"Test$n\",\"lastName\":\"Traffic\",\"email\":\"test$n@example.net\"}" \
       | grep -oE '/persons/[0-9]+' | head -1 | cut -d/ -f3)
-    [ -n "$new" ] && ids+=("$new")
+    [[ -n "$new" ]] && ids+=("$new")
   elif (( r < 90 )); then req "${JSON[@]}" -X PATCH "$API/persons/$id" -d "{\"phone\":\"06$RANDOM\"}"
   elif (( r < 95 )); then req "$API/persons/search/findByEmail?email=jdoe@example.net"
   # ~5% errors

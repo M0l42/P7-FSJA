@@ -30,6 +30,7 @@ Ce dépôt contient l'application et toute sa chaîne CI/CD : build et tests aut
 - [Créer une release](#créer-une-release)
 - [Sauvegarde et restauration](#sauvegarde-et-restauration)
 - [Configuration](#configuration)
+- [Monitoring (ELK) et métriques](#monitoring-elk-et-métriques)
 - [Sécurité et mises à jour](#sécurité-et-mises-à-jour)
 
 ## Organisation du dépôt
@@ -43,6 +44,9 @@ Ce dépôt contient l'application et toute sa chaîne CI/CD : build et tests aut
 │   ├── Dockerfile           image du front (build Node 24 → Caddy, utilisateur non root)
 │   └── Caddyfile            configuration du serveur web
 ├── docker-compose.yml       application complète (back + front + volume de données)
+├── docker-compose-elk.yml   monitoring local : Elasticsearch, Logstash, Kibana, Filebeat (hors CI/CD)
+├── elk/                     configuration ELK (Logstash, Filebeat, tableau de bord Kibana)
+├── scripts/                 traffic.sh (trafic simulé), dora.py (métriques DORA)
 ├── Makefile                 commandes du quotidien
 ├── sonar-project.properties configuration de l'analyse SonarQube Cloud
 ├── .trivyignore             vulnérabilités acceptées (vide aujourd'hui ; justification et expiration obligatoires)
@@ -117,6 +121,9 @@ Les tests du front nécessitent Google Chrome ou Chromium (variable `CHROME_BIN`
 | `make test`, `make test-back`, `make test-front` | Lancer les tests |
 | `make backup` | Sauvegarder les données dans `backups/` |
 | `make restore FILE=…` | Restaurer une sauvegarde dans une base vide |
+| `make elk-up` / `make elk-dashboards` / `make elk-down` | Monitoring local (ELK) |
+| `make traffic` | Simuler un usage réaliste |
+| `make dora` | Métriques DORA et KPI du pipeline |
 
 La CI n'utilise pas `make` : elle appelle directement `./gradlew` et `npm`, pour que chaque étape reste visible dans les logs GitHub Actions.
 
@@ -188,6 +195,22 @@ make restore FILE=backups/microcrm-<date>.tar.gz     # restaure dans une base vi
 | `SPRING_DATASOURCE_URL` | back | fichiers HSQLDB sur le volume `microcrm-data` | Emplacement de la base |
 | `SITE_ADDRESS` | front | `:8080` | Adresse servie par Caddy ; un nom de domaine active le HTTPS automatique |
 | `TAG` | les deux | `latest` | Version des images publiées à utiliser |
+
+## Monitoring (ELK) et métriques
+
+Une stack ELK locale (Elasticsearch, Logstash, Kibana, Filebeat 8.19) centralise les logs du back et du front. Elle est séparée de l'application (`docker-compose-elk.yml`) et **hors du pipeline CI/CD**. Elle demande environ 3 Go de mémoire libre.
+
+```shell
+cp .env.example .env     # puis renseigner les trois mots de passe (fichier jamais commité)
+make up                  # l'application
+make elk-up              # la stack ELK
+make elk-dashboards      # le tableau de bord Kibana
+make traffic             # optionnel : simuler 5 minutes d'usage (DURATION=… pour changer)
+```
+
+Kibana : http://localhost:5601 (utilisateur `elastic`, mot de passe `ELASTIC_PASSWORD`), tableau de bord **« MicroCRM – Monitoring »** : volume de requêtes, taux d'erreur, temps de réponse, logs par niveau, endpoints en erreur. Arrêt : `make elk-down` (les logs sont conservés sur le volume `es-data`).
+
+**Métriques DORA et KPI du pipeline** : `make dora` (nécessite la CLI GitHub `gh`, connectée) lit l'historique GitHub Actions et affiche fréquence de déploiement, délai de mise en production, taux d'échec, temps de rétablissement, durée de la CI et taux de réussite de la *quality gate*, avec leur méthode de calcul. Analyse : documentation technique, §6.
 
 ## Sécurité et mises à jour
 
