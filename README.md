@@ -40,7 +40,7 @@ Ce dépôt contient l'application et toute sa chaîne CI/CD : build et tests aut
 │   ├── Dockerfile           image de l'API (build Gradle → JRE Temurin 17, utilisateur non root)
 │   └── gradle.lockfile      versions de dépendances verrouillées
 ├── front/                   application web Angular 22
-│   ├── Dockerfile           image du front (build Node 22 → Caddy, utilisateur non root)
+│   ├── Dockerfile           image du front (build Node 24 → Caddy, utilisateur non root)
 │   └── Caddyfile            configuration du serveur web
 ├── docker-compose.yml       application complète (back + front + volume de données)
 ├── Makefile                 commandes du quotidien
@@ -82,7 +82,7 @@ L'API démarre sur http://localhost:8080, avec une base HSQLDB en mémoire et de
 
 ### Front-end
 
-**Prérequis :** Node.js 22 (22.22.3 ou plus récent) ou 24, npm.
+**Prérequis :** Node.js 24 LTS (npm 11), comme la CI et l'image Docker.
 
 ```shell
 cd front
@@ -92,7 +92,7 @@ npm start                  # ng serve
 
 L'application démarre sur http://localhost:4200 et appelle l'API sur http://localhost:8080.
 
-> Après une modification des dépendances, générer `package-lock.json` avec la même version de npm que la CI (Node 22, npm 10) ; un lock file écrit par une autre version de npm peut être refusé par `npm ci`. Voir la documentation technique, annexe B.
+> Après une modification des dépendances, générer `package-lock.json` avec la même version de npm que la CI (Node 24, npm 11) ; un lock file écrit par une autre version de npm peut être refusé par `npm ci`. Voir la documentation technique, annexe B.
 
 ## Tests
 
