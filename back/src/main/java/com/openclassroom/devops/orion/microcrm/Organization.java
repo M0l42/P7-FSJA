@@ -27,7 +27,9 @@ public class Organization {
     return id;
   }
 
-  @ManyToMany(cascade = CascadeType.ALL)
+  // No CascadeType.REMOVE: deleting an organization only removes its membership links, never the persons
+  // (with CascadeType.ALL, members were deleted along with the organization; bug found through the ELK logs).
+  @ManyToMany(cascade = { CascadeType.PERSIST, CascadeType.MERGE, CascadeType.REFRESH, CascadeType.DETACH })
   private List<Person> persons;
 
   public List<Person> addPerson(Person person) {
