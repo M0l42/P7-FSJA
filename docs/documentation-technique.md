@@ -59,6 +59,12 @@ La compilation, les tests et le déploiement étaient faits à la main. Ce proce
 
 Le sujet mentionne Maven ; le projet utilise **Gradle**. Nous conservons Gradle : changer d'outil de build ajouterait un risque sans bénéfice, et Gradle s'intègre aussi bien à GitHub Actions et à SonarQube.
 
+### Présentation rapide du pipeline CI/CD mis en place
+
+<p align="center"><img src="images/architecture.png" alt="Architecture de MicroCRM : CI/CD, exécution et monitoring" width="80%"></p>
+
+*Schéma d'architecture : intégration et livraison continues (GitHub Actions), exécution (Docker Compose) et monitoring local (ELK).*
+
 ### État initial : analyse locale (étape 1)
 
 Avant toute modification, les builds et les tests existants ont été lancés en local.
@@ -82,33 +88,13 @@ Points relevés, tous traités dans la suite du projet :
 6. **Dockerfile racine unique à cinq cibles** : `alpine:3.19` en fin de vie, `FROM node` sans version, `EXPOSE 4200` sur l'API qui écoute sur 8080.
 7. **Base de données en mémoire** : les données étaient perdues à chaque redémarrage (découvert en préparant le plan de sauvegarde, §7).
 
-### Présentation rapide du pipeline CI/CD mis en place
-
-```text
- push / pull request / nightly                         tag vX.Y.Z (posé par une personne)
-            │                                                        │
-            ▼                                                        ▼
- ┌─────────────────────────────────────────────┐      ┌──────────────────────────────────┐
- │ ci.yml                                      │      │ release.yml                      │
- │  back  : Gradle build, tests, JaCoCo  ─┐    │      │  vérifie le tag (commit sur main)│
- │  front : npm ci, tests, LCOV, build   ─┼─►  │      │  rebuild + tests back et front   │
- │  sonar : SonarQube Cloud + quality gate ◄┘  │      │  appelle cd.yml (images X.Y.Z)   │
- │  deliver (push sur main uniquement) ──────┐ │      │  crée la GitHub Release          │
- └───────────────────────────────────────────┼─┘      └────────────────┬─────────────────┘
-                                             ▼                         │
-                        ┌──────────────────────────────────────────┐   │
-                        │ cd.yml (workflow réutilisable)           │◄──┘
-                        │  build → test de fumée → Trivy → GHCR    │
-                        └──────────────────────────────────────────┘
-```
-
 Le détail de chaque étape est donné au §2 ; la conteneurisation et le déploiement au §3.
 
 ## 2. Étapes de mise en œuvre du pipeline CI/CD
 
 ### 2.1 Structure du pipeline
 
-**Intégration continue (`ci.yml`).**
+**Intégration continue (`ci.yml`).** L'enchaînement complet est représenté sur le schéma d'architecture du §1.
 
 | Job | Étapes | Résultat |
 |---|---|---|
