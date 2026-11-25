@@ -6,3 +6,6 @@ backups/
 
 # Local secrets (ELK passwords): never committed, see .env.example
 .env
+
+# Python bytecode
+__pycache__/

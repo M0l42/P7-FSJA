@@ -16,7 +16,6 @@ date: "November 2026"
 
 <!--
 - Corps du document : décisions, résultats et justifications. Les preuves détaillées sont en annexes (A à D).
-- §6 (monitoring) : à compléter en partie 2 (stack ELK).
 - Cible : 10 à 15 pages en PDF, hors annexes.
 -->
 
@@ -55,6 +54,7 @@ La compilation, les tests et le déploiement étaient faits à la main. Ce proce
 | GitHub Actions | — | Exécution du pipeline CI/CD |
 | SonarQube Cloud | — | Analyse de qualité et de sécurité du code |
 | Trivy | 0.70 | Scan de vulnérabilités des images Docker |
+| Elasticsearch, Logstash, Kibana, Filebeat | 8.19 | Centralisation et visualisation des logs (monitoring local, §6) |
 | GitHub Container Registry | — | Hébergement des images Docker |
 
 Le sujet mentionne Maven ; le projet utilise **Gradle**. Nous conservons Gradle : changer d'outil de build ajouterait un risque sans bénéfice, et Gradle s'intègre aussi bien à GitHub Actions et à SonarQube.
@@ -148,6 +148,9 @@ La publication utilise directement la CLI `docker`, sans action tierce : c'est u
 | `npm run build` | Construire l'application Angular | `front/angular.json` | CI, Docker, local |
 | `make up` / `make down` / `make logs` / `make ps` | Démarrer, arrêter, suivre l'application | `Makefile` | Local, serveur |
 | `make smoke` | Vérifier que l'API et le front répondent | `Makefile` | Local (la CD a son propre test de fumée) |
+| `make elk-up` / `make elk-dashboards` / `make elk-down` | Démarrer le monitoring, créer le tableau de bord Kibana, l'arrêter | `docker-compose-elk.yml`, `elk/` | Local, hors CI/CD |
+| `make traffic` | Simuler un usage réaliste pour le monitoring | `scripts/traffic.sh` | Local |
+| `make dora` | Calculer les métriques DORA et les KPI du pipeline | `scripts/dora.py` | Local, à la demande |
 | `make backup` / `make restore` | Sauvegarder et restaurer les données (§7) | `Makefile` | Serveur, avant chaque mise en production |
 
 Le `Makefile` regroupe les commandes du quotidien (`make help` les liste). La CI n'appelle pas `make` mais les commandes réelles, pour que chaque étape reste visible dans les logs GitHub Actions.
@@ -212,27 +215,29 @@ make logs    # suit les logs des deux services
 make down    # arrête les conteneurs (les données restent sur le volume)
 ```
 
-### 3.3 Stratégie de déploiement
+### 3.3 Plan de déploiement
 
-Orion n'ayant pas de serveur de production accessible dans le cadre de ce projet, le déploiement couvre la **publication des images** sur GitHub Container Registry et une **procédure de mise en production** reproductible avec Docker Compose.
+Orion n'ayant pas de serveur de production dans le cadre de ce projet, le déploiement repose sur les **images publiées** sur GitHub Container Registry et sur une procédure Docker Compose applicable sur n'importe quel serveur.
 
-| Déclencheur | Workflow | Tags publiés | Usage |
+| Déclencheur | Workflow | Images publiées | Usage |
 |---|---|---|---|
-| Push sur `main`, une fois la CI verte | `ci.yml` → `cd.yml` | `sha-<commit>` et `latest` | Dernière version validée ; le tag par commit retrouve exactement le code d'une image |
-| Tag Git `vX.Y.Z` | `release.yml` → `cd.yml` | `X.Y.Z` | Version livrée, immuable, utilisée en production |
+| Push sur `main`, CI verte | `ci.yml` → `cd.yml` | `sha-<commit>` et `latest` | Dernière version validée |
+| Tag `vX.Y.Z` posé par une personne | `release.yml` → `cd.yml` | `X.Y.Z` | Version livrée en production |
 
-Avant toute publication, les images passent le test de fumée et la porte Trivy ; un échec bloque la publication.
+Avant toute publication, les images passent le test de fumée et la porte Trivy (§2.1).
 
-**Mise en production.** Sur le serveur, après une sauvegarde (`make backup`), le même `docker-compose.yml` récupère les images publiées au lieu de les construire :
+**Prérequis techniques du serveur** : Docker 24 ou plus récent avec Docker Compose v2 ; ports 4200 et 8080 libres (80 et 443 si un nom de domaine est utilisé) ; le fichier `docker-compose.yml` et le `Makefile` du dépôt ; environ 1 Go de mémoire pour l'application. Le monitoring (§6) est optionnel et demande environ 3 Go de plus.
 
-```bash
-TAG=1.0.0 docker compose pull
-TAG=1.0.0 docker compose up -d
-```
+**Procédure de mise en production, dans cet ordre :**
+1. `make backup` : sauvegarde des données avant tout changement (§7) ;
+2. `TAG=X.Y.Z docker compose pull` : récupération des images de la version ;
+3. `TAG=X.Y.Z docker compose up -d` : remplacement des conteneurs ; le volume de données est conservé ;
+4. `make ps` puis `make smoke` : les deux services sont `healthy`, l'API et le front répondent ;
+5. si le monitoring est utilisé (`make elk-up`) : vérifier dans Kibana que le taux d'erreur et les temps de réponse restent dans les seuils (§6.2).
 
-Le retour arrière consiste à relancer ces commandes avec la version précédente. **Évolution prévue** : une fois un serveur disponible, un job ajouté à `release.yml` exécutera cette procédure par SSH (clé et adresse du serveur en *GitHub Secrets*).
+En cas de problème, la version précédente se redéploie avec la même procédure (`TAG=<version précédente>`).
 
-**Visibilité.** Le dépôt et les images sont publics pour les besoins du projet de formation. Dans un contexte réel, ils seraient **privés** : le serveur s'authentifierait avant le `pull` (`docker login ghcr.io` avec un jeton en lecture seule), et SonarQube Cloud comme le *code scanning* de GitHub deviendraient payants.
+**Choix justifiés par les mesures** : le test de fumée et la porte Trivy ont bloqué des publications réelles (§5.1) ; le délai de mise en production médian est de quelques dizaines de minutes (§6.1), ce qui permet de publier petit et souvent. Dépôt et images sont publics pour la formation ; dans un contexte réel ils seraient privés et le serveur s'authentifierait avec un jeton en lecture seule.
 
 ## 4. Plan de testing périodique
 
@@ -245,6 +250,7 @@ Ce plan s'appuie sur les tests existants du projet ; en écrire de nouveaux ne f
 | Intégration | Back-end | `contextLoads` : l'application Spring Boot démarre | JUnit 5 | CI |
 | Intégration | Back-end | `PersonRepositoryIntegrationTest` : recherche par e-mail sur une vraie base | JUnit 5, Spring Data | CI |
 | Intégration | Back-end | `CorsConfigurationTest` (2 tests) : l'origine du front reçoit l'en-tête CORS, une autre origine ne le reçoit pas | JUnit 5, MockMvc | CI |
+| Intégration | Back-end | `OrganizationDeletionTest` (2 tests) : supprimer une organisation conserve ses membres ; supprimer une personne la retire de ses organisations (ajoutés avec la correction du §5.3) | JUnit 5, MockMvc | CI |
 | Unitaires | Front-end | 8 tests : 2 services, 4 composants | Karma, Jasmine, Chrome headless | CI |
 | Couverture | Back + front | Part du code exécutée par les tests | JaCoCo, Istanbul/LCOV | CI |
 | Analyse statique | Back + front | Bugs, vulnérabilités, *code smells*, duplication (§5) | SonarQube Cloud | CI |
@@ -276,7 +282,7 @@ La *quality gate* est celle par défaut de SonarQube Cloud (« Sonar way »). El
 - **Qualité** : la *quality gate* empêche l'ajout de code non testé ou présentant des défauts connus.
 - **Non-régression** : les tests sont rejoués à chaque push, sur chaque pull request et chaque nuit. Pour les montées de version majeures, une vérification supplémentaire a été faite : comparaison des réponses de l'API et du rendu du front avant et après (annexe B).
 - **Vérification avant déploiement** : le test de fumée et Trivy garantissent que les images publiées démarrent, répondent et ne contiennent pas de faille critique corrigeable.
-- **Limites** : 12 tests couvrent une petite partie de l'application. Ajouter des tests (contrôleurs REST, scénarios de bout en bout) est la première recommandation pour la suite (§9).
+- **Limites** : 14 tests couvrent une petite partie de l'application. Ajouter des tests (contrôleurs REST, scénarios de bout en bout) est la première recommandation pour la suite (§9).
 
 ## 5. Plan de sécurité
 
@@ -295,198 +301,201 @@ Ce plan suit un principe simple : **identifier, évaluer, recommander, remonter*
 
 | Mesure | Première analyse (22/11/2026) | État actuel (24/11/2026) |
 |---|---|---|
-| Lignes analysées | 1 412 | 1 891 |
-| Vulnérabilités | 6 (note de sécurité **C**) | **0** (note **A**) |
+| Lignes analysées | 1 412 | 2 039 |
+| **Vulnérabilités** | 6 (note de sécurité **C**) | **0** (note **A**) |
 | Security hotspots | 0 | 0 |
-| Bugs | 20 (note de fiabilité C) | 20 |
-| Code smells | 9 (maintenabilité A, ~40 min de dette) | 9 (A) |
-| Couverture globale | 28,4 % | **38,2 %** (lignes 41,9 %, branches 13,8 %) |
-| Duplication | 1,6 % | 1,2 % |
-| *Quality gate* | — | Passée (annexe D, figure 1) |
+| **Bugs** | 20 (note de fiabilité C) | 20 (C) |
+| Code smells | 9 (maintenabilité A) | 12 (A, environ 50 min de dette) |
+| Couverture | 28,4 % | **38,2 %** (lignes 41,9 %, branches 13,8 %) |
+| Duplication | 1,6 % | **1,1 %** |
+| Complexité (cyclomatique / cognitive) | 114 / 18 | 113 / 18 |
 
-**Vulnérabilités identifiées et traitement.**
+Les 6 vulnérabilités de départ sont toutes corrigées : quatre dans l'ancien Dockerfile (remplacé), dépendances Gradle non verrouillées (`gradle.lockfile`), feuille de style chargée sans contrôle d'intégrité (empreinte SRI). La duplication est négligeable. La complexité se concentre dans `person-details.component.ts` (21) et `Person.java` (17), qui sont aussi peu couverts (27 % et 45 %). La couverture reste faible sur les services du front (12 à 15 %).
 
-| Règle | Fichier | Problème | Traitement |
-|---|---|---|---|
-| `docker:S6505`, `docker:S8543` (×3) | `Dockerfile` racine | `npm ci` sans `--ignore-scripts`, `npx` sans version | **Corrigé** : fichier remplacé (§3.1) |
-| `docker:S6471` | `Dockerfile` racine | Image exécutée en `root` | **Corrigé** : utilisateurs non privilégiés |
-| `text:S8569` | `back/build.gradle` | Versions de dépendances non verrouillées | **Corrigé** : `gradle.lockfile` |
-| `Web:S5725` | `front/src/index.html` | Feuille de style chargée depuis un CDN sans contrôle d'intégrité | **Corrigé** : empreinte SRI `sha384` |
+**Alertes prioritaires.** Il ne reste aucune vulnérabilité : les alertes restantes sont des **bugs** (risque de mauvais fonctionnement) et des **code smells** (maintenabilité), qu'il ne faut pas confondre avec des failles. Elles sont classées par impact, en croisant avec ce que le monitoring a observé (§6.3).
 
-**Bugs et code smells.** Ils concernent le code applicatif du front, hors périmètre du pipeline, et sont transmis à l'équipe de développement : 12 promesses dont les erreurs ne sont jamais traitées (une erreur de l'API passe inaperçue pour l'utilisateur), 7 champs de formulaire sans libellé et un tableau sans en-têtes (accessibilité), un appel asynchrone dans un constructeur (smell critique, `PersonDetailsComponent`).
+| # | Règle | Type | Où | Problème | Lien avec ELK / OWASP 2025 | Priorité |
+|---|---|---|---|---|---|---|
+| 1 | `typescript:S9383` | Bug | `organization-details.component.ts:58` (suppression) | Promesse sans traitement d'erreur | ELK : 500 sur `DELETE /organizations` ; l'utilisateur ne voyait rien (A10) | **Haute** |
+| 2–6 | `typescript:S9383` | Bug | 5 écritures : enregistrement et suppression d'une personne, ajout et retrait d'une organisation, enregistrement d'une organisation | Promesses sans traitement d'erreur | ELK : 400 et 404 renvoyés par l'API, sans retour à l'utilisateur (A10) | **Haute** |
+| 7–12 | `typescript:S9383` | Bug | 6 chargements (listes du tableau de bord, fiches, liste des organisations) | Promesses sans traitement d'erreur | Une API indisponible laisserait des pages vides sans message (A10) | Moyenne |
+| 13 | `typescript:S7059` | Smell **critique** | `person-details.component.ts:33` | Appel asynchrone dans un constructeur | Comportement difficile à tester (couverture 27 %) | Moyenne |
+| 14 | `java:S6813` (×2) | Smell | `InitialDataFixture.java` | Injection par champ au lieu du constructeur | Dépendances implicites, tests plus difficiles | Basse |
+| 15 | `Web:InputWithoutLabelCheck`, `Web:S6853`, `Web:S5256` | Bug / smell | 7 champs, 6 libellés, 1 tableau (formulaires) | Accessibilité : champs sans libellé associé, tableau sans en-têtes | Utilisateurs de lecteurs d'écran (RGAA) | Moyenne |
 
-**Zones de complexité.** La complexité est faible (117 en cyclomatique, 18 en cognitive). Les composants les plus lourds, `person-details` et `organization-details`, sont aussi les moins couverts (27 % et 36 %).
-
-**Couverture.** La première mesure était faussée : les fichiers de test étaient comptés comme du code à couvrir. Après correction de la mesure et ajout des tests CORS, elle passe de 28,4 % à 38,2 %. Elle reste faible sur les services du front.
-
-**Rapports Trivy.** Les images sont aussi analysées par Trivy, dont les résultats sont dans l'onglet *Security* de GitHub (annexe D, figures 7 et 8). La porte ne bloque que les vulnérabilités **critiques corrigeables** : il n'y en a aucune. Les alertes restantes (élevées et moyennes) se trouvent surtout dans le binaire de Caddy, compilé avec des bibliothèques Go dont une version corrigée existe déjà (par exemple `golang.org/x/net` 0.60.0, corrigé en 0.62.0). Aucune version de Caddy les intégrant n'est encore publiée (2.11.9 est la dernière) : Dependabot proposera la nouvelle image dès sa sortie, et la revue mensuelle de l'onglet *Security* (§8.3) assure le suivi.
-
-**Ce que la mise en place a montré :**
-- **le pipeline s'est contrôlé lui-même** : la première analyse a signalé 6 vulnérabilités dans le workflow `ci.yml` (scripts npm à l'installation, `npx` sans version, action tierce référencée par tag), corrigées avant la première fusion ;
-- **la *quality gate* est réellement bloquante** : la pull request de correction CORS a été bloquée à 25 % de couverture du nouveau code (son fichier de test était encore compté), puis acceptée à 100 % après correction de la mesure (annexe D, figure 2) ;
-- **l'analyse automatique ne remplace pas la revue** : SonarQube n'a pas signalé la configuration CORS ouverte à toutes les origines ; elle a été trouvée en relisant le code.
+**Ce que SonarQube ne voit pas.** Le monitoring a révélé deux bugs de l'API absents de l'analyse statique : une suppression d'organisation qui supprimait ses membres ou échouait en 500 (corrigé, §5.3), et une erreur 500 au lieu de 400 sur un identifiant mal formé. L'analyse statique et l'observation à l'exécution sont complémentaires.
 
 ### 5.2 Analyse des risques
 
 L'application manipule des **données personnelles** (noms, e-mails) : le RGPD s'applique. La sévérité tient compte du contexte, une application interne accessible uniquement sur le réseau de l'entreprise.
 
-**Risques applicatifs (OWASP Top 10, 2021)**
+**Risques applicatifs (OWASP Top 10 : 2025)**
 
 | Réf. | Risque constaté | Sévérité | Traitement |
 |---|---|---|---|
-| A01 – Broken Access Control | L'API n'a **aucune authentification** : quiconque atteint le port 8080 peut lire, modifier et supprimer toutes les données | **Élevée** | Remonté à la direction technique, priorité n°1 |
-| A05 – Security Misconfiguration | CORS autorisait **toutes les origines** | Moyenne | **Corrigé** |
-| A06 – Vulnerable and Outdated Components | 90 vulnérabilités npm, Angular 17 et Spring Boot 3.2 en fin de support, 9 vulnérabilités critiques dans le JAR | **Élevée** | **Corrigé** : Spring Boot 4.2, Angular 22, 0 vulnérabilité |
-| A02 – Cryptographic Failures | L'API est servie en HTTP : les données circulent en clair | Moyenne | HTTPS via Caddy en production |
-| A09 – Logging and Monitoring Failures | Pas de journalisation centralisée ni d'alerte | Moyenne | Partie 2 (stack ELK) |
-| — (intégrité des données) | Base en mémoire : chaque déploiement effaçait les données | **Élevée** | **Corrigé** : volume persistant et sauvegardes (§7) |
+| A01 Broken Access Control / A07 Authentication Failures | L'API n'a **aucune authentification** : quiconque atteint le port 8080 peut lire, modifier et supprimer les données | **Élevée** | Remonté à la direction technique, priorité n°1 |
+| A02 Security Misconfiguration | CORS ouvert à toutes les origines | Moyenne | **Corrigé** |
+| A03 Software Supply Chain Failures | 90 vulnérabilités npm, 9 critiques dans le JAR, frameworks en fin de support, actions GitHub référencées par tag | **Élevée** | **Corrigé** : montées de version, lock files, SRI, actions épinglées, Dependabot, Trivy |
+| A04 Cryptographic Failures | API servie en HTTP : données en clair sur le réseau | Moyenne | HTTPS via Caddy en production |
+| A06 Insecure Design | Supprimer une organisation supprimait ses membres (cascade de suppression) | **Élevée** | **Corrigé** (trouvé grâce au monitoring) |
+| A09 Security Logging and Alerting Failures | Aucune journalisation centralisée | Moyenne | **Partiellement corrigé** : logs centralisés dans ELK ; alertes à mettre en place |
+| A10 Mishandling of Exceptional Conditions | Erreurs non traitées dans le front (12 promesses), 500 au lieu de 400 sur un identifiant mal formé | Moyenne | Plan d'action (§5.3) |
 
 **Risques liés au pipeline**
 
 | Risque | Mesure en place |
 |---|---|
-| Secret exposé dans le code ou les logs | Un seul secret, masqué dans les logs ; *secret scanning* + *push protection* |
-| Jeton aux droits trop larges | `GITHUB_TOKEN` éphémère, permissions minimales par workflow |
-| Action GitHub compromise | Actions officielles ou d'éditeurs reconnus, actions tierces épinglées par SHA (annexe A) |
-| Image publiée vulnérable ou qui ne démarre pas | Test de fumée et porte Trivy avant publication, seulement après une CI verte |
-| Dépendance devenue vulnérable sans changement de code | Run nightly, alertes et mises à jour Dependabot |
-| Mise à jour automatique incompatible | Dependabot encadré par des règles ; chaque PR passe la CI (§8) |
-| Pull request venant d'un fork | Pas de secrets transmis ; analyse SonarQube ignorée, revue manuelle |
+| Secret exposé | Un seul secret CI, masqué ; mots de passe ELK dans un `.env` ignoré par Git ; *secret scanning* et *push protection* |
+| Jeton aux droits trop larges | `GITHUB_TOKEN` éphémère, permissions minimales ; utilisateur Logstash limité à l'écriture des logs |
+| Action GitHub compromise | Actions tierces épinglées par SHA (annexe A) |
+| Image vulnérable ou qui ne démarre pas | Test de fumée et porte Trivy avant toute publication |
+| Dépendance devenue vulnérable | Run nightly, Dependabot |
+| Mise à jour automatique incompatible | Règles Dependabot, CI obligatoire (§8) |
+| Données personnelles dans les logs | IP des clients et en-têtes HTTP supprimés par Logstash ; stack ELK limitée à `127.0.0.1` |
 
 ### 5.3 Plan d'action / Remédiation
 
-**Actions réalisées dans ce projet**
+**Réalisé dans ce projet**
+- ✅ CORS restreint, dépendances verrouillées, SRI, conteneurs non `root`, images officielles figées, Dependabot, permissions minimales.
+- ✅ Publication bloquée par Trivy (9 vulnérabilités critiques) : Spring Boot 3.2 → 4.2, puis Angular 17 → 22 ; aucune vulnérabilité acceptée aujourd'hui (annexe B).
+- ✅ Données persistantes et sauvegardes (§7).
+- ✅ **Correction issue du monitoring** : supprimer une organisation ne supprime plus ses membres. Le test ajouté reproduisait la perte de données avant correction ; après correction, plus aucune erreur 500 sur `/organizations` dans ELK.
+- ✅ Logs centralisés et tableau de bord (§6).
+- ✅ Absence d'authentification remontée à la direction technique, avec une condition : pas d'exposition hors du réseau interne.
 
-- ✅ CORS restreint à l'origine du front (variable `APP_CORS_ORIGINS`), avec tests.
-- ✅ Dépendances Gradle verrouillées ; intégrité de la feuille de style du CDN contrôlée (SRI).
-- ✅ **Décision SEC01** : le premier run de la CD a été **bloqué par Trivy** (9 vulnérabilités critiques venant de Spring Boot 3.2.5). Correction en deux temps : passage en Spring Boot 3.5 avec Tomcat corrigé, et acceptation formelle, datée et justifiée, de deux vulnérabilités sans correctif gratuit en 6.x (fonctionnalités non utilisées par MicroCRM).
-- ✅ **Montée vers Spring Boot 4.2 (SEC02)**, conseillée par le mentor : les deux vulnérabilités acceptées sont corrigées, `.trivyignore` est de nouveau vide.
-- ✅ **Montée vers Angular 22 (SEC03)**, une version majeure à la fois : 0 vulnérabilité npm (contre 90).
-- ✅ Données persistantes et procédure de sauvegarde testée (§7).
-- ✅ Conteneurs non `root`, images officielles figées, Dependabot, *secret scanning*, permissions minimales.
-- ✅ Absence d'authentification remontée à la direction technique, avec une condition : **pas d'exposition hors du réseau interne tant que ce point n'est pas traité.**
-
-La démarche suivie pour les montées de version (changements séparés, preuves de non-régression) et les pièges rencontrés sont détaillés en annexe B.
-
-**Court terme**
-- Décision de la direction technique sur l'authentification (comptes internes ou SSO, rôles).
-- Corriger les 20 bugs relevés par SonarQube dans le front (gestion des erreurs, accessibilité).
-- Passer `npm audit` en bloquant pour les vulnérabilités critiques, maintenant que le compteur est à zéro (§8).
+**Court terme (prochaine itération)**
+- Front : traiter les erreurs des 12 promesses et afficher un message à l'utilisateur, en commençant par les 5 écritures (alertes 1 à 6) ; ajouter les tests correspondants.
+- API : renvoyer 400 sur un identifiant mal formé (gestionnaire d'exceptions).
+- Alertes Kibana : taux d'erreur 5xx et temps de réponse p95 au-delà des seuils du §6.2.
+- *Quality gate* plus stricte : ajouter une condition « aucun nouveau bug de fiabilité » et passer `npm audit` en bloquant pour les vulnérabilités critiques.
 
 **Long terme**
-- Authentification (Spring Security + OpenID Connect) côté API et front.
-- Servir l'API derrière Caddy en HTTPS, sans exposer directement le port 8080.
-- Migrer vers PostgreSQL (sauvegardes à chaud, restauration à un instant précis).
-- Étendre l'épinglage par SHA aux actions officielles ; évaluer une image d'exécution *distroless*.
+- Authentification (Spring Security + OpenID Connect).
+- API derrière Caddy en HTTPS ; migration vers PostgreSQL.
+- Accessibilité des formulaires (libellés, en-têtes de tableau).
 
 ## 6. Monitoring, métriques & KPI
 
-<!-- À compléter en partie 2 (stack ELK). -->
+Deux sources de mesure, à ne pas confondre : le **pipeline** (historique GitHub Actions et SonarQube : vitesse et fiabilité des livraisons) et l'**application** (logs centralisés dans ELK : comportement à l'exécution).
+
+**Stack de monitoring.** Un fichier `docker-compose-elk.yml` distinct, hors du pipeline CI/CD (trop lourd), lance Elasticsearch, Logstash, Kibana et Filebeat 8.19 en local (`make elk-up`, environ 3 Go de mémoire). Filebeat lit les logs que Docker écrit déjà pour les conteneurs du back et du front ; Logstash les convertit au format ECS (Elastic Common Schema) ; Elasticsearch les indexe ; Kibana les affiche. Côté application, le back écrit ses logs en JSON ECS et un journal d'accès HTTP (méthode, chemin, statut, durée), le front (Caddy) son journal d'accès en JSON. Sécurité : authentification activée, mots de passe hors du dépôt, ports limités à `127.0.0.1`, utilisateur Logstash limité à l'écriture des logs, adresses IP et en-têtes HTTP supprimés. Le tableau de bord est versionné avec le code (`make elk-dashboards`).
 
 ### 6.1 Métriques DORA
 
-> TODO (partie 2) : Lead Time, Deployment Frequency, MTTR, Change Failure Rate (méthode de calcul + valeurs observées).
+Calcul reproductible par `make dora` (`scripts/dora.py`), qui lit l'historique GitHub Actions. Un **déploiement** est une publication réussie des images depuis `main` (ce que le serveur récupère au §3.3). Période : depuis la première exécution de la CD (23/11/2026), avant laquelle rien ne pouvait être déployé.
+
+| Métrique | Méthode de calcul | Valeur mesurée | Repère DORA (niveau « élite ») |
+|---|---|---|---|
+| **Deployment Frequency** | Publications réussies sur `main` / jours | **7,8 par jour** (14 en 1,8 jour, sur 17 tentatives ; 3 releases) | Plusieurs par jour |
+| **Lead Time for Changes** | Premier commit d'une pull request → première publication qui l'inclut | **Médiane 38 min** (6 min à 12,6 h) ; fusion → publication : 6 min | Moins d'un jour |
+| **Change Failure Rate** | Exécutions en échec sur `main` / exécutions sur `main` | **18 %** (3 sur 17) | Moins de 15 % |
+| **Mean Time to Restore** | Échec sur `main` → exécution réussie suivante | **Médiane 5,9 h** (11 min à 6,1 h, 3 cas) | Moins d'une heure |
+
+**Analyse.** La fréquence de déploiement et le délai de mise en production sont au niveau « élite » : des changements petits, testés en 2 à 3 minutes, publiés automatiquement. Le taux d'échec (18 %) doit être lu avec son contexte : les 3 échecs sont des **publications bloquées par la porte Trivy** (9 vulnérabilités critiques à deux reprises, puis 1), donc des défauts arrêtés avant la production et non des incidents subis par les utilisateurs. Le temps de rétablissement est le point faible : les blocages sont survenus la nuit et ont été corrigés le lendemain, et la décision (montée de Spring Boot) demandait un arbitrage humain. **Recommandations** : notifier immédiatement l'équipe d'un échec sur `main`, maintenir les dépendances à jour en continu (Dependabot) pour éviter les blocages de sécurité, et garder des changements petits. **Limite** : 1,8 jour d'historique et un seul développeur ; ces valeurs sont à suivre dans le temps plutôt qu'à comparer telles quelles.
 
 ### 6.2 KPI personnalisés
 
-> TODO (partie 2) : temps de build, temps des tests, taux d'erreurs dans les logs, autre KPI pertinent.
+| KPI | Source | Mesure | Valeur | Objectif | Seuil d'alerte |
+|---|---|---|---|---|---|
+| **K1 Durée de la CI** | Pipeline | Durée d'une exécution sur pull request (back, front, SonarQube) | Médiane **2,4 min**, max 3,3 min (back 0,6 ; front 0,7 ; SonarQube 1,4) | < 5 min | > 10 min |
+| **K2 Qualité** | Pipeline | Taux de réussite de la *quality gate*, couverture, vulnérabilités | **88 %** (43/49), couverture 38,2 %, 0 vulnérabilité | > 90 %, couverture en hausse, 0 vulnérabilité | Gate en échec sur `main`, vulnérabilité > 0 |
+| **K3 Taux d'erreur** | Application | Part des requêtes en 4xx et 5xx | Back **5,1 %** (dont 2,3 % de 5xx) ; front 0 % | 5xx < 0,1 % | 5xx > 1 % sur 5 min |
+| **K4 Temps de réponse** | Application | Médiane et 95ᵉ percentile de l'API | **14 ms / 54 ms** (p95 ≈ 90 ms pendant le pic) | p95 < 200 ms | p95 > 500 ms sur 5 min |
+| **K5 Volume et pics** | Application | Requêtes par minute, logs ERROR et WARN | Médiane **210 req/min**, pic **1 058 req/min** (69 req/s) ; 8 ERROR, 15 WARN | Pas d'ERROR | ERROR > 0 sur 5 min |
+
+K2 est légèrement sous l'objectif (88 %) : les 6 échecs de la *quality gate* sont des blocages justifiés : trois pour une couverture insuffisante du nouveau code (correction CORS, point d'entrée Angular, correction du monitoring) et trois pour un problème de sécurité (schéma `workflow_run` de la première CD, vulnérabilités du script `dora.py` sur deux exécutions), tous corrigés avant fusion. Un taux trop proche de 100 % signalerait au contraire une *quality gate* trop permissive.
+
+Les valeurs K3 à K5 proviennent d'un trafic **simulé** (`make traffic` : 4 minutes, un pic de 20 secondes, environ 5 % d'erreurs volontaires dont deux types d'appels déclenchant des bugs réels). Elles valident la chaîne de mesure et les seuils ; elles seront à recalculer sur un trafic réel.
 
 ### 6.3 Analyse synthétique du monitoring
 
-> TODO (partie 2) : tendances observées, points forts, points à améliorer, dashboards, alertes.
+Le tableau de bord Kibana (annexe D, figure 9) affiche le volume de requêtes du back et du front, le taux d'erreur, les erreurs HTTP dans le temps, les temps de réponse (médiane et p95), les logs par niveau, les endpoints en erreur et le détail des dernières erreurs.
+
+**Tendances et points forts.** L'application absorbe le pic (69 req/s) sans erreur supplémentaire : le p95 monte d'environ 25 à 90 ms puis redescend. Le front ne présente aucune erreur et répond en moins de 2 ms.
+
+**Points à améliorer, reliés au code.** Les erreurs 500 se concentrent sur deux endpoints. Le détail des erreurs (`error.type`) a mené directement aux causes :
+- `DELETE /organizations/{id}` : `ConcurrentModificationException`, due à une cascade de suppression qui supprimait les membres d'une organisation. **Corrigé** (§5.3) ; après correction, plus aucune 500 sur cet endpoint dans Kibana. Côté front, SonarQube signalait au même endroit une promesse sans traitement d'erreur (alerte 1 du §5.1) : l'utilisateur ne voyait jamais l'échec. Le croisement des deux sources a donné la cause et l'impact.
+- `GET /persons/{id}` avec un identifiant mal formé : `ConversionFailedException` et 500 au lieu de 400 (plan d'action §5.3).
+- Les logs WARN révèlent une dette technique invisible à l'analyse statique : annotation `@Temporal` dépréciée (Hibernate 7) et `spring.jpa.open-in-view` activé par défaut, à traiter lors des prochaines mises à jour (§8).
+
+**Alertes recommandées** (Kibana, à mettre en place) : taux de 5xx et p95 au-delà des seuils du §6.2, apparition de logs ERROR. **Limites** : stack locale, trafic simulé, pas encore d'alertes ni de conservation longue des logs.
 
 ## 7. Plan de sauvegarde des données
 
 ### 7.1 Ce qui doit être sauvegardé
 
-**Constat de départ.** La base HSQLDB fonctionnait **en mémoire**, dans la mémoire vive du processus Java. Le test a été fait : une personne créée par l'API disparaissait après un simple redémarrage du conteneur. Or chaque déploiement recrée le conteneur : **chaque release effaçait les données du CRM**, et la livraison continue rendait ce défaut plus fréquent. Correction apportée, par configuration et sans modifier le code Java : HSQLDB stocke désormais sa base dans des **fichiers** (`jdbc:hsqldb:file:/data/microcrm`) sur un **volume Docker** nommé `microcrm-data` ; les tables sont créées au premier démarrage puis conservées ; les tests automatisés gardent une base en mémoire, isolée.
+Au départ, la base HSQLDB vivait **en mémoire** : une personne créée par l'API disparaissait au redémarrage du conteneur, donc à chaque déploiement. Elle est désormais stockée dans des fichiers sur le **volume Docker `microcrm-data`** (configuration seulement, sans changement de code Java ; les tests gardent une base en mémoire).
 
 | Élément | Où il se trouve | Sauvegarde |
 |---|---|---|
-| **Données du CRM** | Volume Docker `microcrm-data` | `make backup` : archive `backups/microcrm-<date>.tar.gz` |
-| **Code, configuration, workflows, documentation** | Dépôt Git sur GitHub | Historique Git ; chaque release est un tag `vX.Y.Z` |
-| **Images Docker** | GitHub Container Registry | Une image immuable par version et par commit |
-| **Artefacts de build** (JAR, build Angular) | *GitHub Releases* | Attachés à chaque release, avec leurs empreintes SHA-256 |
-| **Secret `SONAR_TOKEN`** | *GitHub Secrets* | Non sauvegardé, volontairement : en cas de perte, on en génère un nouveau |
+| **Données du CRM** (personnes, organisations) | Volume `microcrm-data` | `make backup` |
+| **Code, configuration, workflows, documentation** | Dépôt Git (GitHub) | Historique Git, un tag par release |
+| **Images Docker** | GitHub Container Registry | Une image immuable par version |
+| **Artefacts de build** (JAR, build Angular) | *GitHub Releases* | Attachés à chaque release, avec empreintes SHA-256 |
+| **Logs** (monitoring local) | Volume `es-data` d'Elasticsearch | Non sauvegardés : données d'observation, reconstituables |
+| **Secrets** (`SONAR_TOKEN`, mots de passe ELK) | *GitHub Secrets*, fichier `.env` local | Non sauvegardés volontairement : on les régénère en cas de perte |
 
 ### 7.2 Procédure de sauvegarde
 
-`make backup` arrête l'API quelques secondes (pour copier des fichiers cohérents ; le front reste disponible), archive le contenu du volume dans `backups/microcrm-AAAAMMJJ-HHMMSS.tar.gz`, puis redémarre l'API. Le dossier `backups/` est exclu de Git, car il contient des données personnelles.
-
-- **Format** : archive `tar.gz` des fichiers HSQLDB.
-- **Fréquence** : une sauvegarde quotidienne planifiée sur le serveur (`cron`, la nuit), plus une **avant chaque mise en production** ; les 14 dernières archives sont conservées.
-- **Stockage** : copier les archives hors du serveur (stockage objet ou autre machine) : une sauvegarde sur le même disque ne protège pas d'une panne de ce disque.
+- **Méthode** : `make backup` arrête l'API quelques secondes (fichiers cohérents ; le front reste disponible), archive le volume dans `backups/microcrm-AAAAMMJJ-HHMMSS.tar.gz`, puis redémarre l'API. Le dossier `backups/` est exclu de Git, car il contient des données personnelles.
+- **Fréquence** : une sauvegarde par jour, planifiée la nuit sur le serveur (`cron`), et une **avant chaque mise en production** (étape 1 du §3.3). Conserver les 14 dernières archives.
+- **Stockage** : copier les archives hors du serveur, dans un emplacement à accès restreint (RGPD).
+- **Justification** : avec une fréquence de déploiement de plusieurs fois par jour (§6.1), la sauvegarde avant mise en production est la protection la plus utile ; la sauvegarde quotidienne couvre la perte du serveur.
 
 ### 7.3 Procédure de restauration
 
-**Scénario 1 : perte ou corruption des données.**
-1. Arrêter l'application : `docker compose down`.
-2. Si le volume existe encore, le supprimer **volontairement** : `docker volume rm <projet>_microcrm-data`. Cette étape est laissée à une personne, pour qu'un écrasement de données ne soit jamais accidentel.
-3. Restaurer : `make restore FILE=backups/microcrm-<date>.tar.gz`. La commande **refuse de s'exécuter si la base n'est pas vide**, puis redémarre l'API.
-
-Procédure testée : création d'une personne, sauvegarde, suppression du volume, restauration ; la personne est bien présente après la restauration.
-
-**Scénario 2 : une nouvelle version pose problème.** On revient à la version précédente, conservée sur GHCR (`TAG=<version précédente> docker compose pull && docker compose up -d`). Les données sont conservées, puisqu'elles sont sur le volume et non dans l'image. Si la nouvelle version avait modifié le schéma de la base, on restaure aussi la sauvegarde faite juste avant la mise en production.
-
-**Limitations** : courte interruption de l'API pendant la sauvegarde ; HSQLDB convient à une application de démonstration, pas à une production avec de nombreux utilisateurs simultanés (cible : PostgreSQL) ; les archives ne sont pas chiffrées et doivent être stockées dans un emplacement à accès restreint (RGPD).
+`make restore FILE=backups/microcrm-<date>.tar.gz` restaure une archive. Par sécurité, la commande **refuse d'écraser une base existante** : remplacer des données reste une action volontaire (`docker compose down` puis suppression du volume par une personne). Procédure testée : création d'une personne, sauvegarde, suppression du volume, restauration ; la personne est retrouvée.
 
 ## 8. Plan de mise à jour
 
 ### 8.1 Mise à jour de l'application
 
-**Mises à jour mineures et correctifs.** Dependabot ouvre chaque lundi des pull requests groupées (un groupe npm, un groupe Gradle, les images Docker, les actions GitHub). Chacune passe la CI complète ; si tout est vert, elle est fusionnée après une relecture rapide du changelog. Les **alertes de sécurité** de Dependabot génèrent des pull requests immédiates, à traiter en priorité.
-
-**Mises à jour majeures** (Angular, Spring Boot, Gradle, version de Java ou de Node). Dependabot est configuré pour **ne pas les proposer** : sa première exécution a montré pourquoi. Il proposait de passer Angular de 17 à 22 un paquet à la fois, et `zone.js` dans une version incompatible avec Angular 17 ; la CI a bloqué ces pull requests, et des règles ont été ajoutées. Une montée majeure est un **travail planifié**, conduit comme celles de ce projet (annexe B) :
-1. une version majeure à la fois, avec les outils de migration officiels (`ng update` pour Angular, guide de migration pour Spring Boot) ;
-2. un commit ou une pull request par étape, pour qu'un problème soit attribuable à un seul changement ;
-3. une preuve de non-régression **avant / après** : réponses de l'API sur un jeu d'appels de référence, rendu des pages du front, tests et test de fumée ;
-4. une release dédiée, avec retour arrière possible vers la version précédente (§7.3).
-
-**Images Docker.** Les images de base sont figées en version et mises à jour par Dependabot (correctifs uniquement : la version de Java doit rester celle de la compilation, et celle de Node compatible avec Angular). Le run nightly et Trivy détectent une image devenue vulnérable.
-
-**Prochaines échéances connues** : Node 24 (fin de support en avril 2028), Spring Boot 4.2 (décembre 2027), Java 17 (la cible de compilation pourra passer en 21 ou 25), Karma, outil de test historique d'Angular, à remplacer par l'outil recommandé par Angular lors d'une prochaine itération.
+- **Correctifs et versions mineures** : Dependabot ouvre chaque lundi des pull requests groupées (npm, Gradle, images Docker, actions GitHub). Chacune passe la CI complète (environ 2 minutes, §6.2) puis est fusionnée si tout est vert. Les **alertes de sécurité** Dependabot sont traitées en priorité.
+- **Versions majeures** (Angular, Spring Boot, Gradle, Java, Node) : Dependabot est configuré pour **ne pas les proposer**. Sa première exécution proposait Angular 17 → 22 paquet par paquet, et des versions incompatibles : la CI les a bloquées. Une montée majeure est un travail planifié, conduit comme Spring Boot 4 et Angular 22 dans ce projet (annexe B) : une version majeure à la fois avec les outils de migration officiels, un changement par pull request, et une preuve de non-régression avant/après (réponses de l'API, rendu des pages, tests, test de fumée).
+- **Images Docker** : versions figées, mises à jour par Dependabot (correctifs seulement : Java doit rester la version de compilation, Node compatible avec Angular). Trivy signale les images devenues vulnérables (§5.1).
+- **Justification** : la montée de Spring Boot a fait passer les vulnérabilités critiques du JAR de 9 à 0, celle d'Angular les vulnérabilités npm de 90 à 0 ; le coût d'une mise à jour est faible tant que la CI reste rapide et le taux de réussite de la *quality gate* élevé (§6.2).
 
 ### 8.2 Mise à jour du pipeline CI/CD
 
-- **Actions GitHub** : Dependabot propose leurs nouvelles versions ; pour les actions épinglées par SHA, il met à jour le SHA et le commentaire de version. Avant de fusionner une mise à jour d'action tierce, vérifier qu'elle correspond à une *release* officielle de l'éditeur (annexe A).
-- **Outils** : la version de Trivy est fixée dans `cd.yml` ; celle de Gradle dans le wrapper, avec l'empreinte de la distribution vérifiée ; celle de Node dans `ci.yml`, `release.yml` et `front/Dockerfile`, qui doivent rester alignées.
-- **Lock files** : `gradle.lockfile` se régénère avec `./gradlew dependencies --write-locks` ; `package-lock.json` doit être généré avec la version de npm de la CI.
-- **Vulnérabilités acceptées** : `.trivyignore` est relu à chaque mise à jour ; chaque entrée a une date d'expiration, après laquelle la porte Trivy bloque de nouveau.
-- **Évolution recommandée** : passer `npm audit` en bloquant pour les vulnérabilités critiques, maintenant que le compteur est à zéro, pour qu'il le reste.
+- **Actions GitHub** : mises à jour par Dependabot ; les actions tierces sont épinglées par SHA de commit (annexe A), à vérifier contre une *release* officielle avant fusion.
+- **Outils** : version de Trivy fixée dans `cd.yml`, de Gradle dans le wrapper (empreinte vérifiée), de Node dans `ci.yml`, `release.yml` et `front/Dockerfile` (à garder alignées), de la stack ELK dans `docker-compose-elk.yml` (8.x, mise à jour manuelle, hors CI).
+- **Lock files** : `gradle.lockfile` se régénère avec `./gradlew dependencies --write-locks` ; `package-lock.json` doit être écrit par la même version de npm que la CI (npm 11).
+- **Vulnérabilités acceptées** : chaque entrée de `.trivyignore` a une justification et une date d'expiration, après laquelle la porte Trivy bloque de nouveau.
 
 ### 8.3 Fréquence & bonnes pratiques
 
 | Fréquence | Action |
 |---|---|
 | Chaque jour | Run nightly : un échec signale une nouvelle vulnérabilité ou une dépendance cassée |
-| Chaque semaine | Traiter les pull requests Dependabot (fusion si la CI est verte) |
-| Chaque mois | Relire le tableau de bord SonarQube, l'onglet *Security* (rapports Trivy) et `.trivyignore` |
-| Chaque trimestre | Vérifier les dates de fin de support des frameworks et des images ; planifier les montées majeures |
-| À chaque release | Sauvegarde avant mise en production ; vérification du test de fumée sur le serveur |
+| Chaque semaine | Traiter les pull requests Dependabot |
+| Chaque mois | Relire SonarQube, l'onglet *Security* (Trivy), `.trivyignore` et le tableau de bord Kibana |
+| Chaque trimestre | Vérifier les fins de support (Node 24 : avril 2028, Spring Boot 4.2 : décembre 2027) et planifier les montées majeures |
+| À chaque release | Sauvegarde, puis procédure du §3.3 |
 
-Bonnes pratiques : une seule chose à la fois ; jamais de mise à jour sans CI verte ; garder les mêmes versions d'outils en local et en CI ; documenter chaque décision de sécurité avec sa justification et sa date d'expiration ; lire le changelog avant une mise à jour majeure.
+Bonnes pratiques : un seul changement à la fois, jamais de mise à jour sans CI verte, mêmes versions d'outils en local et en CI, et une justification écrite pour chaque exception de sécurité.
 
 ## 9. Conclusion
 
-**Améliorations apportées.** MicroCRM est passé d'un processus manuel à une chaîne automatisée complète :
-- chaque modification est compilée, testée et analysée par SonarQube, et `main` n'accepte que des changements validés ;
-- chaque fusion produit des images Docker testées au démarrage, scannées par Trivy et publiées sur GHCR ;
-- un tag produit une release complète : JAR, build Angular, images versionnées et commandes de déploiement.
+**Améliorations apportées.** MicroCRM est passé d'un processus manuel à une chaîne automatisée et observable :
+- chaque modification est compilée, testée et analysée par SonarQube ; `main` n'accepte que des changements validés ;
+- chaque fusion produit des images testées au démarrage, scannées par Trivy et publiées ; un tag produit une release complète ;
+- les logs du back et du front sont centralisés dans ELK, avec un tableau de bord versionné ;
+- les métriques de livraison sont calculées de façon reproductible (`make dora`).
 
-Le pipeline a aussi servi à corriger l'existant : Spring Boot 3.2 → 4.2, Angular 17 → 22, Gradle 8.7 → 8.14, conteneurs non `root`, CORS restreint, dépendances verrouillées, et données enfin persistantes et sauvegardées.
+Le pipeline a aussi servi à corriger l'existant : Spring Boot 3.2 → 4.2, Angular 17 → 22, conteneurs non `root`, CORS restreint, dépendances verrouillées, données persistantes et sauvegardées, et un bug de perte de données trouvé grâce au monitoring.
 
 **Gains observés.**
-- **Fiabilité** : vulnérabilités SonarQube de 6 à 0 (note de sécurité C → A), vulnérabilités npm de 90 à 0, zéro vulnérabilité acceptée. Les données ne sont plus perdues au déploiement.
-- **Rapidité** : retour complet en 3 à 4 minutes sur une pull request ; publication des images en moins de 10 minutes après une fusion ; une release se déclenche avec une seule commande (`git tag` + `git push`).
-- **Qualité** : chaque nouvelle ligne doit être couverte à 80 % ; la couverture globale est passée de 28,4 % à 38,2 %.
-- **Sécurité par construction** : le pipeline a bloqué de lui-même plusieurs problèmes réels. Il a signalé ses propres failles de configuration, bloqué une pull request mal couverte, refusé de publier une image contenant 9 vulnérabilités critiques, et détecté une nouvelle vulnérabilité apparue lors d'une montée de version.
+- **Rapidité** : 7,8 déploiements par jour, délai de mise en production médian de 38 minutes, CI de 2,4 minutes par pull request (§6).
+- **Fiabilité et sécurité** : vulnérabilités SonarQube 6 → 0 (note C → A), npm 90 → 0, vulnérabilités critiques du JAR 9 → 0, sans exception acceptée. Les 3 échecs sur `main` sont des publications **bloquées avant la production** par Trivy.
+- **Qualité** : chaque nouvelle ligne doit être couverte à 80 % ; couverture globale 28,4 % → 38,2 % ; *quality gate* réussie à 88 %, chaque échec correspondant à un défaut réel arrêté avant fusion.
+- **Observabilité** : erreurs et performances visibles en temps réel ; le croisement des logs et de SonarQube a mené à une correction concrète.
 
-**Recommandations pour les itérations suivantes**
-1. **Authentification** de l'API et du front : c'est le risque principal restant.
-2. **Plus de tests** : contrôleurs REST et scénarios de bout en bout sur l'application déployée.
-3. **Corriger les 20 bugs** relevés par SonarQube dans le front.
-4. **Déploiement automatique** sur un serveur (job SSH) dès qu'un environnement est disponible, et passage à PostgreSQL.
-5. **Monitoring** (partie 2) : stack ELK, métriques DORA et KPI, alertes.
+**Recommandations pour les itérations suivantes** (par ordre de priorité)
+1. **Authentification** de l'API et du front : risque principal restant (§5.2).
+2. **Traitement des erreurs dans le front** : les 12 promesses signalées par SonarQube, en commençant par les 5 écritures, et le 400 sur un identifiant mal formé (§5.3).
+3. **Alertes** Kibana sur les seuils du §6.2 et notification immédiate d'un échec sur `main`, pour réduire le temps de rétablissement (5,9 h aujourd'hui).
+4. **Plus de tests** sur les composants les plus complexes et les moins couverts (`person-details`, services du front).
+5. **Déploiement automatique** sur un serveur (job SSH) dès qu'un environnement est disponible, puis PostgreSQL et HTTPS de bout en bout.
 
 ## Annexes
 
@@ -519,6 +528,10 @@ Le pipeline a aussi servi à corriger l'existant : Spring Boot 3.2 → 4.2, Angu
 Preuve : les réponses de l'API à **16 appels de référence** (lectures, création, modification, suppression, cas 404, CORS) ont été enregistrées avant, puis rejouées après : **identiques**. Un comportement de l'outil de test a changé : avec Spring Boot 4, MockMvc répond 200 sans en-tête CORS à une requête d'une origine non autorisée, alors que le vrai serveur répond 403. Le test unitaire vérifie désormais la vraie garantie (absence de l'en-tête `Access-Control-Allow-Origin`), et le 403 est vérifié sur le vrai conteneur par le test de fumée de la CD.
 
 **SEC03 – Angular 22,** une version majeure à la fois (17 → 18 → 19 → 20 → 21 → 22), avec à chaque étape les migrations officielles (`ng update`), les tests, le build et un commit séparé. Les migrations ont converti les gabarits vers la nouvelle syntaxe de contrôle (`*ngFor` → `@for`, `*ngIf` → `@if`) et remplacé les modules HTTP dépréciés. Puis `npm audit fix` : **0 vulnérabilité npm**. Preuve : 8 tests sur 8 et couverture identique (30,76 % des lignes) ; le **rendu des 4 routes** (texte visible, 13 champs de formulaire, 14 liens) capturé avant puis comparé sur la nouvelle image Docker : **identique** ; aucune erreur dans la console du navigateur.
+
+**Ce que les contrôles ont arrêté.** SonarQube a signalé 6 vulnérabilités dans le premier workflow `ci.yml` (scripts npm à l'installation, `npx` sans version, action référencée par tag), puis un schéma risqué dans la première CD (`workflow_run`), et deux vulnérabilités dans le script `dora.py` (argument injecté dans une commande, chemin d'écriture libre) : toutes corrigées avant fusion. La *quality gate* a bloqué une pull request mal couverte, puis la correction du monitoring tant qu'un test manquait. Trivy a refusé trois publications. SonarQube n'a en revanche pas signalé la configuration CORS ouverte, trouvée en relisant le code.
+
+**Correction issue du monitoring.** Les logs montraient des 500 (`ConcurrentModificationException`) sur `DELETE /organizations/{id}`. Cause : la relation organisation–personnes propageait la suppression (`CascadeType.ALL`) ; selon les données, la requête échouait ou **supprimait silencieusement les membres**. Le test ajouté a reproduit la perte de données avant correction. Après correction (plus de suppression en cascade) : 6 tests sur 6, réponses de l'API identiques sur les 16 appels de référence, et plus aucune 500 sur cet endpoint dans Kibana.
 
 **Pièges rencontrés.**
 - **Version de npm** : le lock file avait d'abord été généré avec npm 11 (poste local), et npm 10 (Node 22, en CI et dans Docker) l'a refusé. Le problème est revenu avec Dependabot, qui écrit lui aussi le lock file avec npm 11 : chacune de ses mises à jour npm échouait. La correction de fond a été de construire le front avec **Node 24 LTS** (npm 11, supporté jusqu'en avril 2028 et par Angular 22) : la même version de npm est maintenant utilisée sur le poste local, par Dependabot, en CI et dans Docker. Un outil de build doit être le même partout.
@@ -571,3 +584,7 @@ L'image du front est un peu plus lourde : l'image officielle `caddy` remplace un
 **Figure 8 – Détail d'une alerte Trivy** : paquet, version installée, version corrigée et référence CVE, ce qui permet de décider de l'action à mener.
 
 ![Détail d'une alerte Trivy](images/security-trivy-alert.png)
+
+**Figure 9 – Tableau de bord Kibana « MicroCRM – Monitoring »** (trafic simulé, 4 minutes) : requêtes par minute avec le pic d'activité, taux d'erreur par service, erreurs HTTP dans le temps, temps de réponse de l'API (médiane et p95), logs applicatifs par niveau, endpoints en erreur et détail des dernières erreurs (`ConcurrentModificationException`), qui a mené à la correction du §5.3.
+
+![Tableau de bord Kibana](images/kibana-dashboard.png)
